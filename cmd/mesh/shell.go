@@ -7,449 +7,321 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
-	"sync"
 	"time"
 
-	"golang.org/x/term"
+	"github.com/c-bata/go-prompt"
 	"web5-mesh/cmd/mesh/commands"
 	"web5-mesh/src/crypto"
 )
 
-const colorPrompt = "\x1b[38;5;208m"
-const colorReset = "\x1b[0m"
+// ============================================================================
+// RESTAURAR TERMINAL
+// ============================================================================
 
-func getPrompt() string {
-	return fmt.Sprintf("%sxion@nodo:~$%s ", colorPrompt, colorReset)
+func restoreTerminal() {
+	fmt.Print("\x1b[?12l")
+	fmt.Print("\x1b[?25h")
+	fmt.Print("\x1b[?1049l")
+	fmt.Print("\x1b[0m")
+	fmt.Print("\x1b[2J")
+	fmt.Print("\x1b[H")
+	cmd := exec.Command("stty", "sane")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
 }
 
-var commandHistory []string
+// ============================================================================
+// FUNCIÓN extractPayload (la que falta)
+// ============================================================================
+
+func extractPayload(raw string) string {
+	if strings.HasPrefix(raw, "RELAY ") {
+		fields := strings.Fields(raw)
+		if len(fields) >= 4 {
+			return fields[3]
+		}
+	} else if strings.HasPrefix(raw, "RESPONSE ") {
+		fields := strings.Fields(raw)
+		if len(fields) >= 3 {
+			return fields[2]
+		}
+	}
+	return raw
+}
+
+// ============================================================================
+// COMPLETER - Autocompletado
+// ============================================================================
+
+func completer(d prompt.Document) []prompt.Suggest {
+	text := d.TextBeforeCursor()
+	words := strings.Fields(text)
+
+	if len(words) == 0 {
+		return []prompt.Suggest{
+			{Text: "whoami", Description: "Mostrar tu identidad DID"},
+			{Text: "acl", Description: "Gestión de nodos de confianza"},
+			{Text: "alias", Description: "Gestión de alias locales"},
+			{Text: "group", Description: "Gestión de grupos"},
+			{Text: "faro", Description: "Gestión de Faros"},
+			{Text: "help", Description: "Mostrar ayuda"},
+			{Text: "exit", Description: "Salir de la shell"},
+		}
+	}
+
+	switch words[0] {
+	case "acl":
+		if len(words) == 1 {
+			return []prompt.Suggest{
+				{Text: "add", Description: "Agregar nodo a ACL"},
+				{Text: "import", Description: "Importar claves públicas"},
+				{Text: "remove", Description: "Eliminar nodo de ACL"},
+				{Text: "list", Description: "Listar nodos en ACL"},
+				{Text: "clear", Description: "Limpiar ACL completa"},
+			}
+		}
+	case "alias":
+		if len(words) == 1 {
+			return []prompt.Suggest{
+				{Text: "add", Description: "Agregar alias"},
+				{Text: "remove", Description: "Eliminar alias"},
+				{Text: "list", Description: "Listar alias"},
+			}
+		}
+	case "group":
+		if len(words) == 1 {
+			return []prompt.Suggest{
+				{Text: "create", Description: "Crear nuevo grupo"},
+				{Text: "list", Description: "Listar grupos"},
+				{Text: "send", Description: "Enviar mensaje a grupo"},
+				{Text: "add", Description: "Agregar miembro a grupo"},
+				{Text: "remove", Description: "Eliminar miembro de grupo"},
+				{Text: "invite", Description: "Invitar a grupo"},
+				{Text: "kick", Description: "Expulsar de grupo"},
+				{Text: "leave", Description: "Salir de grupo"},
+				{Text: "delete", Description: "Eliminar grupo"},
+				{Text: "info", Description: "Info de grupo"},
+			}
+		}
+	case "faro":
+		if len(words) == 1 {
+			return []prompt.Suggest{
+				{Text: "add", Description: "Agregar Faro"},
+				{Text: "list", Description: "Listar Faros"},
+				{Text: "remove", Description: "Eliminar Faro"},
+				{Text: "test", Description: "Probar Faros"},
+			}
+		}
+	}
+
+	s := []prompt.Suggest{}
+	allCommands := []string{
+		"whoami", "acl", "alias", "group", "faro", "help", "exit",
+		"acl add", "acl import", "acl remove", "acl list", "acl clear",
+		"alias add", "alias remove", "alias list",
+		"group create", "group list", "group send", "group add", "group remove",
+		"group invite", "group kick", "group leave", "group delete", "group info",
+		"faro add", "faro list", "faro remove", "faro test",
+	}
+
+	for _, cmd := range allCommands {
+		if strings.HasPrefix(cmd, text) {
+			s = append(s, prompt.Suggest{Text: cmd})
+		}
+	}
+
+	return s
+}
+
+// ============================================================================
+// VARIABLES GLOBALES
+// ============================================================================
 
 var (
-	currentLine      []rune
-	currentCursorPos int
-	lineMu           sync.Mutex
+	globalConn     *net.UDPConn
+	globalACLIndex map[[4]byte]peerKeys
+	globalID       *crypto.Identity
+	globalFaroAddr string
 )
 
-func redrawLine(line []rune, cursorPos int) {
-	fmt.Print("\r\033[K" + getPrompt() + string(line))
-	if cursorPos < len(line) {
-		fmt.Printf("\033[%dD", len(line)-cursorPos)
+// ============================================================================
+// LISTENER UDP
+// ============================================================================
+
+func startNetworkListener() {
+	if globalConn == nil {
+		return
 	}
-}
 
-func readLine() (string, error) {
-	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
-	if err != nil {
-		return "", err
-	}
-	defer term.Restore(int(os.Stdin.Fd()), oldState)
-
-	lineMu.Lock()
-	currentLine = []rune{}
-	currentCursorPos = 0
-	lineMu.Unlock()
-
-	var historyIndex int = -1
-
+	buf := make([]byte, 65536)
 	for {
-		b := make([]byte, 256)
-		n, err := os.Stdin.Read(b)
+		n, _, err := globalConn.ReadFromUDP(buf)
 		if err != nil {
-			return "", err
+			continue
 		}
 
-		needsRedraw := false
-		for i := 0; i < n; i++ {
-			char := b[i]
-			if char == '\r' || char == '\n' {
-				fmt.Println()
+		raw := stripPadding(string(buf[:n]))
+		raw = extractPayload(raw)
 
-				lineMu.Lock()
-				result := string(currentLine)
-				currentLine = []rune{}
-				currentCursorPos = 0
-				lineMu.Unlock()
+		parts := strings.SplitN(raw, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
 
-				if len(result) > 0 {
-					commandHistory = append(commandHistory, result)
-					if len(commandHistory) > 100 {
-						commandHistory = commandHistory[1:]
-					}
-				}
+		kidBytes, err := hex.DecodeString(parts[0])
+		if err != nil || len(kidBytes) != 4 {
+			continue
+		}
 
-				return result, nil
-			}
-			if char == '\b' || char == '\x7f' {
-				lineMu.Lock()
-				if currentCursorPos > 0 {
-					currentLine = append(currentLine[:currentCursorPos-1], currentLine[currentCursorPos:]...)
-					currentCursorPos--
-					needsRedraw = true
-				}
-				lineMu.Unlock()
+		var kid [4]byte
+		copy(kid[:], kidBytes)
+
+		peer, exists := globalACLIndex[kid]
+		if !exists {
+			continue
+		}
+
+		ciphertext, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			continue
+		}
+
+		plaintext, err := crypto.DecryptPayload(peer.SharedKey, ciphertext)
+		if err != nil {
+			continue
+		}
+
+		var inner InnerPayload
+		if json.Unmarshal(plaintext, &inner) != nil {
+			continue
+		}
+
+		innerForVerify := inner
+		innerForVerify.Sig = ""
+		verifyJSON, _ := json.Marshal(innerForVerify)
+		sigBytes, _ := base64.StdEncoding.DecodeString(inner.Sig)
+
+		if !crypto.VerifyMessage(peer.PubKeyEd, verifyJSON, sigBytes) {
+			continue
+		}
+		if time.Now().Unix()-inner.TS > 60 {
+			continue
+		}
+
+		displayName := crypto.ResolveDID(peer.DID)
+
+		if strings.HasPrefix(inner.Cmd, "GROUP:") {
+			parts := strings.SplitN(inner.Cmd, ":", 3)
+			if len(parts) == 3 {
+				fmt.Printf("\n💬 [GRUPO:%s] [%s]: %s\n", parts[1], displayName, parts[2])
 				continue
 			}
-			if char == '\x1b' && i+2 < n && b[i+1] == '[' {
-				switch b[i+2] {
-				case 'A':
-					lineMu.Lock()
-					if len(commandHistory) > 0 {
-						if historyIndex == -1 {
-							historyIndex = len(commandHistory) - 1
-						} else if historyIndex > 0 {
-							historyIndex--
-						}
-						currentLine = []rune(commandHistory[historyIndex])
-						currentCursorPos = len(currentLine)
-						needsRedraw = true
-					}
-					lineMu.Unlock()
-					i += 2
-				case 'B':
-					lineMu.Lock()
-					if historyIndex != -1 {
-						if historyIndex < len(commandHistory)-1 {
-							historyIndex++
-							currentLine = []rune(commandHistory[historyIndex])
-						} else {
-							historyIndex = -1
-							currentLine = []rune{}
-						}
-						currentCursorPos = len(currentLine)
-						needsRedraw = true
-					}
-					lineMu.Unlock()
-					i += 2
-				case 'C':
-					lineMu.Lock()
-					if currentCursorPos < len(currentLine) {
-						currentCursorPos++
-						needsRedraw = true
-					}
-					lineMu.Unlock()
-					i += 2
-				case 'D':
-					lineMu.Lock()
-					if currentCursorPos > 0 {
-						currentCursorPos--
-						needsRedraw = true
-					}
-					lineMu.Unlock()
-					i += 2
-				}
-				continue
-			}
-			if char >= 32 && char <= 126 {
-				lineMu.Lock()
-				currentLine = append(currentLine[:currentCursorPos], append([]rune{rune(char)}, currentLine[currentCursorPos:]...)...)
-				currentCursorPos++
-				needsRedraw = true
-				lineMu.Unlock()
-			}
 		}
-		if needsRedraw {
-			lineMu.Lock()
-			redrawLine(currentLine, currentCursorPos)
-			lineMu.Unlock()
-		}
+
+		fmt.Printf("\n💬 [%s]: %s\n", displayName, inner.Cmd)
 	}
 }
+
+// ============================================================================
+// ANNOUNCE LOOP
+// ============================================================================
+
+func startAnnounceLoop() {
+	if globalConn == nil {
+		return
+	}
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		ts := fmt.Sprintf("%d", time.Now().Unix())
+		sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
+		msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
+		globalConn.Write([]byte(addPadding(msg)))
+	}
+}
+
+// ============================================================================
+// SHELL PRINCIPAL
+// ============================================================================
 
 func runInteractiveShell() {
-	id, err := crypto.LoadOrCreateIdentity()
+	var err error
+
+	defer restoreTerminal()
+
+	globalID, err = crypto.LoadOrCreateIdentity()
 	if err != nil {
 		fmt.Printf("❌ Error de identidad: %v\n", err)
 		return
 	}
 
-	// Registrar el DID propio para mostrarlo como "yo"
-	crypto.SetSelfDID(id.DID)
+	crypto.SetSelfDID(globalID.DID)
+
+	globalFaroAddr = FaroAddr
+
+	if globalFaroAddr != "" {
+		faroAddr, _ := net.ResolveUDPAddr("udp", globalFaroAddr)
+		globalConn, _ = net.DialUDP("udp", nil, faroAddr)
+	}
+
+	globalACLIndex, _ = buildACLIndex(globalID)
 
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println("  XION KERNEL v1.0.0 | Modo Seguro: ON")
-	fmt.Println("  DID: " + id.DID)
+	fmt.Println("  🆔 TU IDENTIDAD:")
+	fmt.Println("  DID:        " + globalID.DID)
+
+	pubEdHex := hex.EncodeToString(globalID.PubKeyEd)
+	pubXHex := hex.EncodeToString(globalID.PubKeyX[:])
+	fmt.Println("  PubKey Ed:  " + pubEdHex)
+	fmt.Println("  PubKey X:   " + pubXHex)
+	fmt.Println()
+	fmt.Println("  📋 Para que otro nodo te agregue, decile que ejecute:")
+	fmt.Printf("  acl add <alias> %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
+	fmt.Println()
+	if globalFaroAddr != "" {
+		fmt.Printf("  📡 Faro activo: %s\n", globalFaroAddr)
+	} else {
+		fmt.Println("  📡 Faro: NO CONFIGURADO")
+	}
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n\n", len(globalACLIndex))
 
-	aclIndex, _ := buildACLIndex(id)
-	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n", len(aclIndex))
-
-	faroAddr, _ := net.ResolveUDPAddr("udp", FaroAddr)
-	conn, _ := net.DialUDP("udp", nil, faroAddr)
-
-	go func() {
-		for {
-			ts := fmt.Sprintf("%d", time.Now().Unix())
-			sig := base64.StdEncoding.EncodeToString(id.SignMessage([]byte(ts)))
-			msg := fmt.Sprintf("ANNOUNCE %s %s %s", id.DID, ts, sig)
-			conn.Write([]byte(addPadding(msg)))
-			time.Sleep(15 * time.Second)
-		}
-	}()
-
-	go func() {
-		buf := make([]byte, 65536)
-		for {
-			n, _, err := conn.ReadFromUDP(buf)
-			if err != nil {
-				continue
-			}
-
-			raw := stripPadding(string(buf[:n]))
-			raw = extractPayload(raw)
-
-			parts := strings.SplitN(raw, "|", 2)
-			if len(parts) != 2 {
-				continue
-			}
-
-			kidBytes, err := hex.DecodeString(parts[0])
-			if err != nil || len(kidBytes) != 4 {
-				continue
-			}
-
-			var kid [4]byte
-			copy(kid[:], kidBytes)
-
-			peer, exists := aclIndex[kid]
-			if !exists {
-				continue
-			}
-
-			ciphertext, err := base64.StdEncoding.DecodeString(parts[1])
-			if err != nil {
-				continue
-			}
-
-			plaintext, err := crypto.DecryptPayload(peer.SharedKey, ciphertext)
-			if err != nil {
-				continue
-			}
-
-			var inner InnerPayload
-			if json.Unmarshal(plaintext, &inner) != nil {
-				continue
-			}
-
-			innerForVerify := inner
-			innerForVerify.Sig = ""
-			verifyJSON, _ := json.Marshal(innerForVerify)
-			sigBytes, _ := base64.StdEncoding.DecodeString(inner.Sig)
-
-			if !crypto.VerifyMessage(peer.PubKeyEd, verifyJSON, sigBytes) {
-				continue
-			}
-			if time.Now().Unix()-inner.TS > 60 {
-				continue
-			}
-
-			// === MANEJO DE SINCRONIZACIÓN DE GRUPO ===
-			if strings.HasPrefix(inner.Cmd, "GROUP_SYNC:") {
-				parts := strings.SplitN(inner.Cmd, ":", 3)
-				if len(parts) == 3 {
-					groupAlias := parts[1]
-					groupJSON := parts[2]
-
-					var group crypto.Group
-					if err := json.Unmarshal([]byte(groupJSON), &group); err == nil {
-						crypto.SaveGroupDirect(groupAlias, &group)
-						sid := commands.CreateSession("group", groupAlias)
-
-						lineMu.Lock()
-						savedLine := make([]rune, len(currentLine))
-						copy(savedLine, currentLine)
-						savedPos := currentCursorPos
-						lineMu.Unlock()
-
-						fmt.Print("\r\033[K")
-						displayName := crypto.ResolveDID(peer.DID)
-						fmt.Printf("📩 [%s] te agregó al grupo: %s (%s)\n", displayName, groupAlias, group.Name)
-						fmt.Printf("✅ Sesión [%d] creada automáticamente\n", sid)
-						fmt.Print(getPrompt() + string(savedLine))
-						if savedPos < len(savedLine) {
-							fmt.Printf("\033[%dD", len(savedLine)-savedPos)
-						}
-						os.Stdout.Sync()
-					}
-					continue
-				}
-			}
-
-			// === MANEJO DE ELIMINACIÓN DE GRUPO ===
-			if strings.HasPrefix(inner.Cmd, "GROUP_DELETE:") {
-				parts := strings.SplitN(inner.Cmd, ":", 2)
-				if len(parts) == 2 {
-					groupAlias := parts[1]
-					crypto.DeleteGroup(groupAlias)
-
-					lineMu.Lock()
-					savedLine := make([]rune, len(currentLine))
-					copy(savedLine, currentLine)
-					savedPos := currentCursorPos
-					lineMu.Unlock()
-
-					fmt.Print("\r\033[K")
-					displayName := crypto.ResolveDID(peer.DID)
-					fmt.Printf("🗑️ [%s] eliminó el grupo: %s\n", displayName, groupAlias)
-					fmt.Print(getPrompt() + string(savedLine))
-					if savedPos < len(savedLine) {
-						fmt.Printf("\033[%dD", len(savedLine)-savedPos)
-					}
-					os.Stdout.Sync()
-					continue
-				}
-			}
-
-			// === MANEJO DE SALIDA VOLUNTARIA DE MIEMBRO ===
-			if strings.HasPrefix(inner.Cmd, "GROUP_LEAVE:") {
-				parts := strings.SplitN(inner.Cmd, ":", 3)
-				if len(parts) == 3 {
-					groupAlias := parts[1]
-					leaverDID := parts[2]
-
-					crypto.RemoveMember(groupAlias, leaverDID)
-
-					lineMu.Lock()
-					savedLine := make([]rune, len(currentLine))
-					copy(savedLine, currentLine)
-					savedPos := currentCursorPos
-					lineMu.Unlock()
-
-					fmt.Print("\r\033[K")
-					displayName := crypto.ResolveDID(leaverDID)
-					fmt.Printf("👋 [%s] salió del grupo: %s\n", displayName, groupAlias)
-					fmt.Print(getPrompt() + string(savedLine))
-					if savedPos < len(savedLine) {
-						fmt.Printf("\033[%dD", len(savedLine)-savedPos)
-					}
-					os.Stdout.Sync()
-					continue
-				}
-			}
-
-			// === MANEJO DE KICK (expulsado por admin) ===
-			if strings.HasPrefix(inner.Cmd, "GROUP_KICKED:") {
-				parts := strings.SplitN(inner.Cmd, ":", 2)
-				if len(parts) == 2 {
-					groupAlias := parts[1]
-					crypto.DeleteGroup(groupAlias)
-
-					lineMu.Lock()
-					savedLine := make([]rune, len(currentLine))
-					copy(savedLine, currentLine)
-					savedPos := currentCursorPos
-					lineMu.Unlock()
-
-					fmt.Print("\r\033[K")
-					displayName := crypto.ResolveDID(peer.DID)
-					fmt.Printf("🚪 [%s] te expulsó del grupo: %s\n", displayName, groupAlias)
-					fmt.Print(getPrompt() + string(savedLine))
-					if savedPos < len(savedLine) {
-						fmt.Printf("\033[%dD", len(savedLine)-savedPos)
-					}
-					os.Stdout.Sync()
-					continue
-				}
-			}
-
-			// === MANEJO DE INVITACIONES A GRUPO ===
-			if strings.HasPrefix(inner.Cmd, "GROUP_INVITE:") {
-				parts := strings.SplitN(inner.Cmd, ":", 3)
-				if len(parts) == 3 {
-					groupAlias := parts[1]
-					inviterDID := parts[2]
-
-					lineMu.Lock()
-					savedLine := make([]rune, len(currentLine))
-					copy(savedLine, currentLine)
-					savedPos := currentCursorPos
-					lineMu.Unlock()
-
-					fmt.Print("\r\033[K")
-					displayName := crypto.ResolveDID(inviterDID)
-					fmt.Printf("📩 [%s] te invitó al grupo: %s\n", displayName, groupAlias)
-					fmt.Print(getPrompt() + string(savedLine))
-					if savedPos < len(savedLine) {
-						fmt.Printf("\033[%dD", len(savedLine)-savedPos)
-					}
-					os.Stdout.Sync()
-					continue
-				}
-			}
-
-			// === MANEJO DE MENSAJES DE GRUPO ===
-			if strings.HasPrefix(inner.Cmd, "GROUP:") {
-				parts := strings.SplitN(inner.Cmd, ":", 3)
-				if len(parts) == 3 {
-					groupAlias := parts[1]
-					message := parts[2]
-
-					lineMu.Lock()
-					savedLine := make([]rune, len(currentLine))
-					copy(savedLine, currentLine)
-					savedPos := currentCursorPos
-					lineMu.Unlock()
-
-					fmt.Print("\r\033[K")
-					displayName := crypto.ResolveDID(peer.DID)
-					fmt.Printf("💬 [GRUPO:%s] [%s]: %s\n", groupAlias, displayName, message)
-					fmt.Print(getPrompt() + string(savedLine))
-					if savedPos < len(savedLine) {
-						fmt.Printf("\033[%dD", len(savedLine)-savedPos)
-					}
-					os.Stdout.Sync()
-
-					respText := "✅ Recibido en grupo"
-					respInner := InnerPayload{FromDID: id.DID, TS: time.Now().Unix(), Cmd: respText}
-					respPayload, _ := buildEncryptedPayload(id, peer.SharedKey, respInner)
-					conn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
-					continue
-				}
-			}
-
-			// === MANEJO DE MENSAJES NORMALES (chat directo) ===
-			lineMu.Lock()
-			savedLine := make([]rune, len(currentLine))
-			copy(savedLine, currentLine)
-			savedPos := currentCursorPos
-			lineMu.Unlock()
-
-			fmt.Print("\r\033[K")
-			displayName := crypto.ResolveDID(peer.DID)
-			fmt.Printf("💬 [%s]: %s\n", displayName, inner.Cmd)
-			fmt.Print(getPrompt() + string(savedLine))
-			if savedPos < len(savedLine) {
-				fmt.Printf("\033[%dD", len(savedLine)-savedPos)
-			}
-			os.Stdout.Sync()
-
-			respText := handleCommand(inner.Cmd)
-			respInner := InnerPayload{FromDID: id.DID, TS: time.Now().Unix(), Cmd: respText}
-			respPayload, _ := buildEncryptedPayload(id, peer.SharedKey, respInner)
-			conn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
-		}
-	}()
+	go startNetworkListener()
+	go startAnnounceLoop()
 
 	for {
-		fmt.Print(getPrompt())
-		input, err := readLine()
-		if err != nil {
-			break
-		}
+		input := prompt.Input("xion@nodo:~$ ", completer,
+			prompt.OptionPrefixTextColor(prompt.Yellow),
+			prompt.OptionInputTextColor(prompt.White),
+			prompt.OptionSuggestionBGColor(prompt.DarkGray),
+			prompt.OptionSuggestionTextColor(prompt.White),
+			prompt.OptionSelectedSuggestionBGColor(prompt.Yellow),
+			prompt.OptionSelectedSuggestionTextColor(prompt.Black),
+		)
 
 		input = strings.TrimSpace(input)
 		if input == "" {
 			continue
 		}
 
-		output := commands.Execute(input, id)
-		if output != "" {
-			fmt.Println(output)
+		if input == "exit" || input == "/exit" {
+			fmt.Println("\n👋 Saliendo de la consola asegurada...")
+			if globalConn != nil {
+				globalConn.Close()
+			}
+			return
 		}
 
-		if input == "exit" || input == "/exit" {
-			fmt.Println("👋 Saliendo de la consola asegurada...")
-			break
+		output := commands.Execute(input, globalID)
+		if output != "" {
+			fmt.Println(output)
 		}
 	}
 }

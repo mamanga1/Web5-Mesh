@@ -1,0 +1,29 @@
+# Identidad y datos sensibles
+node.key
+acl.json
+alias.json
+
+# Binarios compilados (SOLO en la raíz)
+/mesh
+/faro
+*.exe
+
+# Logs
+*.log
+
+# Archivos temporales
+*.tmp
+*.swp
+*.swo
+*.backup*
+
+# Directorios de sistema
+.xion/
+.DS_Store
+.idea/
+.vscode/
+
+# Backups
+*.bak
+*.zip
+*.tar.gz
