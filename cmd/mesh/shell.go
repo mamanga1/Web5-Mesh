@@ -35,25 +35,6 @@ func restoreTerminal() {
 }
 
 // ============================================================================
-// FUNCIÓN extractPayload (la que falta)
-// ============================================================================
-
-func extractPayload(raw string) string {
-	if strings.HasPrefix(raw, "RELAY ") {
-		fields := strings.Fields(raw)
-		if len(fields) >= 4 {
-			return fields[3]
-		}
-	} else if strings.HasPrefix(raw, "RESPONSE ") {
-		fields := strings.Fields(raw)
-		if len(fields) >= 3 {
-			return fields[2]
-		}
-	}
-	return raw
-}
-
-// ============================================================================
 // COMPLETER - Autocompletado
 // ============================================================================
 
@@ -149,7 +130,7 @@ var (
 )
 
 // ============================================================================
-// LISTENER UDP
+// LISTENER UDP (CON RESPUESTA AL FARO - ESTE ES EL ÚNICO CAMBIO)
 // ============================================================================
 
 func startNetworkListener() {
@@ -214,15 +195,29 @@ func startNetworkListener() {
 
 		displayName := crypto.ResolveDID(peer.DID)
 
+		// === MANEJO DE MENSAJES DE GRUPO ===
 		if strings.HasPrefix(inner.Cmd, "GROUP:") {
 			parts := strings.SplitN(inner.Cmd, ":", 3)
 			if len(parts) == 3 {
 				fmt.Printf("\n💬 [GRUPO:%s] [%s]: %s\n", parts[1], displayName, parts[2])
+				
+				// >>> RESPUESTA AL FARO PARA MENSAJES DE GRUPO <<<
+				respText := "✅ Recibido en grupo"
+				respInner := InnerPayload{FromDID: globalID.DID, TS: time.Now().Unix(), Cmd: respText}
+				respPayload, _ := buildEncryptedPayload(globalID, peer.SharedKey, respInner)
+				globalConn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
 				continue
 			}
 		}
 
+		// === MANEJO DE MENSAJES NORMALES ===
 		fmt.Printf("\n💬 [%s]: %s\n", displayName, inner.Cmd)
+		
+		// >>> RESPUESTA AL FARO PARA MENSAJES NORMALES (LO QUE FALTABA) <<<
+		respText := handleCommand(inner.Cmd)
+		respInner := InnerPayload{FromDID: globalID.DID, TS: time.Now().Unix(), Cmd: respText}
+		respPayload, _ := buildEncryptedPayload(globalID, peer.SharedKey, respInner)
+		globalConn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
 	}
 }
 
@@ -283,7 +278,8 @@ func runInteractiveShell() {
 	fmt.Println("  PubKey X:   " + pubXHex)
 	fmt.Println()
 	fmt.Println("  📋 Para que otro nodo te agregue, decile que ejecute:")
-	fmt.Printf("  acl add <alias> %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
+	fmt.Printf("  acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
+	fmt.Printf("  alias add <nick> %s\n", globalID.DID)
 	fmt.Println()
 	if globalFaroAddr != "" {
 		fmt.Printf("  📡 Faro activo: %s\n", globalFaroAddr)

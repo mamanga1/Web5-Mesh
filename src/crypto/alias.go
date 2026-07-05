@@ -3,12 +3,11 @@ package crypto
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 )
 
-const aliasesFile = ".xion/aliases.json"
+const aliasesFile = "alias.json"
 
 type AliasStore struct {
 	Aliases map[string]string `json:"aliases"` // alias → DID
@@ -36,11 +35,6 @@ func GetSelfDID() string {
 	return selfDID
 }
 
-func getAliasesPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, aliasesFile)
-}
-
 func LoadAliases() (*AliasStore, error) {
 	aliasOnce.Do(func() {
 		aliasCache = &AliasStore{
@@ -48,8 +42,7 @@ func LoadAliases() (*AliasStore, error) {
 		}
 	})
 
-	path := getAliasesPath()
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(aliasesFile)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return aliasCache, nil
@@ -64,13 +57,11 @@ func LoadAliases() (*AliasStore, error) {
 }
 
 func SaveAliases(store *AliasStore) error {
-	path := getAliasesPath()
-	os.MkdirAll(filepath.Dir(path), 0700)
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	return os.WriteFile(aliasesFile, data, 0644)
 }
 
 func AddAlias(alias, did string) error {

@@ -6,6 +6,7 @@ import (
 	"os"
 )
 
+// ACLFile se usa en el directorio actual (no en ~/.xion/)
 const ACLFile = "acl.json"
 
 type PeerInfo struct {

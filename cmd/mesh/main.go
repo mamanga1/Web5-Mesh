@@ -11,7 +11,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"web5-mesh/cmd/mesh/commands"
@@ -20,12 +19,6 @@ import (
 
 const FaroAddr = "190.220.45.26:54321"
 const ListenPort = "54321"
-
-// Tabla local de rutas: DID → IP:Port
-var (
-	routeTable = make(map[string]*net.UDPAddr)
-	routeMu    sync.RWMutex
-)
 
 func addPadding(payload string) string {
 	size := 50 + int(time.Now().UnixNano()%150)
@@ -42,6 +35,21 @@ func stripPadding(data string) string {
 		return data[:idx]
 	}
 	return data
+}
+
+func extractPayload(raw string) string {
+	if strings.HasPrefix(raw, "RELAY ") {
+		fields := strings.Fields(raw)
+		if len(fields) >= 4 {
+			return fields[3]
+		}
+	} else if strings.HasPrefix(raw, "RESPONSE ") {
+		fields := strings.Fields(raw)
+		if len(fields) >= 3 {
+			return fields[2]
+		}
+	}
+	return raw
 }
 
 type InnerPayload struct {
@@ -108,64 +116,7 @@ func handleCommand(cmd string) string {
 }
 
 // ============================================================
-// NUEVA LÓGICA P2P: Buscar IP en tabla local o preguntar al Faro
-// ============================================================
-func getPeerAddress(targetDID string) (*net.UDPAddr, error) {
-	// 1. Buscar en tabla local
-	routeMu.RLock()
-	addr, exists := routeTable[targetDID]
-	routeMu.RUnlock()
-
-	if exists {
-		return addr, nil
-	}
-
-	// 2. Preguntar al Faro
-	faroAddr, err := net.ResolveUDPAddr("udp", FaroAddr)
-	if err != nil {
-		return nil, fmt.Errorf("error resolviendo Faro: %v", err)
-	}
-
-	conn, err := net.DialUDP("udp", nil, faroAddr)
-	if err != nil {
-		return nil, fmt.Errorf("error conectando al Faro: %v", err)
-	}
-	defer conn.Close()
-
-	// Enviar WHERE_IS
-	conn.Write([]byte(fmt.Sprintf("WHERE_IS %s", targetDID)))
-
-	// Esperar respuesta
-	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	buf := make([]byte, 4096)
-	n, _, err := conn.ReadFromUDP(buf)
-	if err != nil {
-		return nil, fmt.Errorf("timeout esperando WHERE_IS")
-	}
-
-	resp := strings.TrimSpace(string(buf[:n]))
-	if !strings.HasPrefix(resp, "FOUND ") {
-		return nil, fmt.Errorf("nodo no encontrado en directorio")
-	}
-
-	// Parsear IP:Port
-	addrStr := strings.TrimPrefix(resp, "FOUND ")
-	peerAddr, err := net.ResolveUDPAddr("udp", addrStr)
-	if err != nil {
-		return nil, fmt.Errorf("error parseando dirección: %v", err)
-	}
-
-	// Guardar en tabla local
-	routeMu.Lock()
-	routeTable[targetDID] = peerAddr
-	routeMu.Unlock()
-
-	fmt.Printf("🗺️ Ruta aprendida: %s → %s\n", targetDID, addrStr)
-	return peerAddr, nil
-}
-
-// ============================================================
-// ExecuteRealCommand - P2P DIRECTO (sin relay del Faro)
+// ExecuteRealCommand - VERSIÓN CON RELAY (LA QUE FUNCIONABA)
 // ============================================================
 func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string {
 	// 1. Cargar ACL y obtener claves del peer
@@ -197,23 +148,23 @@ func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string
 		return fmt.Sprintf("❌ Error cifrando: %v", err)
 	}
 
-	// 4. Obtener dirección del peer (tabla local o Faro)
-	peerAddr, err := getPeerAddress(targetDID)
+	// 4. Conectar al Faro
+	faroAddr, err := net.ResolveUDPAddr("udp", FaroAddr)
 	if err != nil {
-		return fmt.Sprintf("❌ No se pudo encontrar al peer: %v", err)
+		return fmt.Sprintf("❌ Error resolviendo Faro: %v", err)
 	}
 
-	// 5. Conectar DIRECTO al peer
-	conn, err := net.DialUDP("udp", nil, peerAddr)
+	conn, err := net.DialUDP("udp", nil, faroAddr)
 	if err != nil {
-		return fmt.Sprintf("❌ Error conectando al peer: %v", err)
+		return fmt.Sprintf("❌ Error conectando al Faro: %v", err)
 	}
 	defer conn.Close()
 
-	// 6. Enviar mensaje DIRECTO (sin RELAY)
-	conn.Write([]byte(addPadding(payload)))
+	// 5. Enviar RELAY al Faro (la versión que funcionaba)
+	relayCmd := fmt.Sprintf("RELAY %s %s %s", targetDID, myID.DID, addPadding(payload))
+	conn.Write([]byte(relayCmd))
 
-	// 7. Esperar respuesta DIRECTA del peer
+	// 6. Esperar respuesta del Faro (que reenvía la respuesta del destino)
 	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	buf := make([]byte, 4096)
 	n, _, err := conn.ReadFromUDP(buf)
@@ -221,8 +172,9 @@ func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string
 		return "⏳ Timeout: El nodo destino no respondió a tiempo"
 	}
 
-	// 8. Procesar respuesta
+	// 7. Procesar respuesta
 	respRaw := stripPadding(string(buf[:n]))
+	respRaw = extractPayload(respRaw)
 	parts := strings.SplitN(respRaw, "|", 2)
 	if len(parts) == 2 {
 		ciphertext, _ := base64.StdEncoding.DecodeString(parts[1])
@@ -247,13 +199,8 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
 	}
 
 	sharedKey, _ := crypto.DeriveSharedKey(myID.PrivKeyX, pubX)
-	
-	peerAddr, err := getPeerAddress(targetDID)
-	if err != nil {
-		log.Fatalf("❌ No se pudo encontrar al peer: %v", err)
-	}
-
-	conn, _ := net.DialUDP("udp", nil, peerAddr)
+	faroAddr, _ := net.ResolveUDPAddr("udp", FaroAddr)
+	conn, _ := net.DialUDP("udp", nil, faroAddr)
 	defer conn.Close()
 
 	inner := InnerPayload{FromDID: myID.DID, TS: time.Now().Unix(), Cmd: command}
@@ -262,7 +209,7 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
 		log.Fatalf("❌ Error cifrando: %v", err)
 	}
 
-	conn.Write([]byte(addPadding(payload)))
+	conn.Write([]byte(fmt.Sprintf("RELAY %s %s %s", targetDID, myID.DID, addPadding(payload))))
 
 	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	buf := make([]byte, 4096)
@@ -272,6 +219,7 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
 	}
 
 	respRaw := stripPadding(string(buf[:n]))
+	respRaw = extractPayload(respRaw)
 	parts := strings.SplitN(respRaw, "|", 2)
 	if len(parts) == 2 {
 		ciphertext, _ := base64.StdEncoding.DecodeString(parts[1])
@@ -285,45 +233,33 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
 	fmt.Printf("📩 Respuesta (cruda): %s\n", respRaw)
 }
 
-// ============================================================
-// runNode - Escucha en puerto local, responde DIRECTO
-// ============================================================
 func runNode(myID *crypto.Identity) {
 	aclIndex, _ := buildACLIndex(myID)
-	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando en puerto %s...\n", len(aclIndex), ListenPort)
+	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando...\n", len(aclIndex))
+	fmt.Println("📡 Keep-alive activo cada 15s.")
 
-	// Escuchar en puerto local
-	addr, _ := net.ResolveUDPAddr("udp", "0.0.0.0:"+ListenPort)
-	conn, err := net.ListenUDP("udp", addr)
-	if err != nil {
-		log.Fatalf("❌ Error escuchando: %v", err)
-	}
+	faroAddr, _ := net.ResolveUDPAddr("udp", FaroAddr)
+	conn, _ := net.DialUDP("udp", nil, faroAddr)
 	defer conn.Close()
 
-	// Goroutine para ANNOUNCE al Faro (DESDE EL SOCKET DE ESCUCHA)
 	go func() {
-		faroAddr, _ := net.ResolveUDPAddr("udp", FaroAddr)
-		
 		for {
 			ts := fmt.Sprintf("%d", time.Now().Unix())
-			sig := base64.StdEncoding.EncodeToString(myID.SignMessage([]byte(ts)))
-			msg := fmt.Sprintf("ANNOUNCE %s %s %s", myID.DID, ts, sig)
-			
-			// Enviar desde el socket de escucha (conn) para que el Faro vea el puerto correcto
-			conn.WriteToUDP([]byte(addPadding(msg)), faroAddr)
+			msg := fmt.Sprintf("ANNOUNCE %s %s %s", myID.DID, ts, base64.StdEncoding.EncodeToString(myID.SignMessage([]byte(ts))))
+			conn.Write([]byte(addPadding(msg)))
 			time.Sleep(15 * time.Second)
 		}
 	}()
 
-	// Loop principal: recibir mensajes DIRECTOS
 	buf := make([]byte, 4096)
 	for {
-		n, remoteAddr, err := conn.ReadFromUDP(buf)
+		n, _, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			continue
 		}
 
 		raw := stripPadding(string(buf[:n]))
+		raw = extractPayload(raw)
 		parts := strings.SplitN(raw, "|", 2)
 		if len(parts) != 2 {
 			continue
@@ -367,8 +303,7 @@ func runNode(myID *crypto.Identity) {
 		respInner := InnerPayload{FromDID: myID.DID, TS: time.Now().Unix(), Cmd: respText}
 		respPayload, _ := buildEncryptedPayload(myID, peer.SharedKey, respInner)
 
-		// Enviar respuesta DIRECTA al remitente (no al Faro)
-		conn.WriteToUDP([]byte(addPadding(respPayload)), remoteAddr)
+		conn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
 	}
 }
 
