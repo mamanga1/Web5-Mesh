@@ -15,8 +15,6 @@ func cmdHelp(args []string, id *crypto.Identity) string {
 	if len(args) > 0 {
 		topic := strings.ToLower(args[0])
 		switch topic {
-		case "session", "sesiones", "multitarea":
-			return getHelpSession()
 		case "acl", "confianza":
 			return getHelpACL()
 		case "chat":
@@ -51,15 +49,17 @@ func cmdHelp(args []string, id *crypto.Identity) string {
 	help.WriteString("    /alias remove <nombre>     - Eliminar un alias\n")
 	help.WriteString("    💡 Tip: chat <alias> \"mensaje\" en vez de pegar DID\n\n")
 
+	help.WriteString("  GRUPOS:\n")
+	help.WriteString("    /group create <alias> <nombre>  - Crear grupo\n")
+	help.WriteString("    /group list                     - Listar grupos\n")
+	help.WriteString("    /group add <alias> <did>        - Agregar miembro\n")
+	help.WriteString("    /group remove <alias> [did]     - Remover miembro o salir\n")
+	help.WriteString("    /group send <alias> <mensaje>   - Enviar mensaje al grupo\n")
+	help.WriteString("    /group delete <alias>           - Eliminar grupo\n")
+	help.WriteString("    /group info <alias>             - Info del grupo\n\n")
+
 	help.WriteString("  COMUNICACIÓN E2E:\n")
 	help.WriteString("    chat <did|alias> <mensaje> - Enviar mensaje cifrado punto a punto\n\n")
-
-	help.WriteString("  MULTITAREA Y SESIONES:\n")
-	help.WriteString("    session list               - Ver sesiones activas y mensajes sin leer\n")
-	help.WriteString("    session new <t> <tgt>      - Crear sesión (ej: chat)\n")
-	help.WriteString("    session attach <id>        - Conectarse a una sesión\n")
-	help.WriteString("    session detach             - Poner sesión actual en background\n")
-	help.WriteString("    💡 Tip: Escribe 'help session' para la guía rápida paso a paso.\n\n")
 
 	help.WriteString("  DOCUMENTOS SOBERANOS:\n")
 	help.WriteString("    import <archivo>           - Meter archivo del host a la bóveda\n")
@@ -88,34 +88,12 @@ func cmdHelp(args []string, id *crypto.Identity) string {
 
 	help.WriteString("  SISTEMA:\n")
 	help.WriteString("    help                       - Este mensaje\n")
-	help.WriteString("    help <tema>                - Ayuda detallada (ej: help session, alias, unix, docs)\n")
+	help.WriteString("    help <tema>                - Ayuda detallada (ej: help alias, unix, docs)\n")
 	help.WriteString("    exit                       - Salir de la consola asegurada\n\n")
 
 	help.WriteString("🔒 NOTA DE SEGURIDAD:\n")
 	help.WriteString("Cero exec.Command. El host solo ve un proceso \"xion/mesh\" y tráfico UDP cifrado.\n")
 	help.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-
-	return help.String()
-}
-
-func getHelpSession() string {
-	var help strings.Builder
-	help.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	help.WriteString("  📻 AYUDA: SESIONES (Multitarea)\n")
-	help.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
-	help.WriteString("Comandos:\n")
-	help.WriteString("  session list           - Ver sesiones activas\n")
-	help.WriteString("  session new <tipo> <tgt>- Crear sesión (ej: chat)\n")
-	help.WriteString("  session attach <id>    - Entrar a una sesión\n")
-	help.WriteString("  session detach         - Ir al fondo (volver al inicio)\n")
-	help.WriteString("\n📱 Guía Rápida (Paso a paso):\n")
-	help.WriteString("  1. Escribe: session new chat did:maia:xxx\n")
-	help.WriteString("  2. La pantalla cambia a modo [CHAT].\n")
-	help.WriteString("  3. Escribe: session detach para salir.\n")
-	help.WriteString("  4. Volverás al inicio. El chat sigue vivo.\n")
-	help.WriteString("  5. Si llega un mensaje, verás un aviso 🔔.\n")
-	help.WriteString("  6. Escribe: session attach <id> para volver.\n")
-	help.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 	return help.String()
 }
@@ -165,7 +143,7 @@ func getHelpAlias() string {
 	help.WriteString("  /alias add amigo did:maia:GVdM6Wix...\n")
 	help.WriteString("  /alias list\n")
 	help.WriteString("  chat amigo \"Hola\"  (en vez de pegar el DID completo)\n")
-	help.WriteString("\n💡 Los alias se guardan en ~/.xion/aliases.json\n")
+	help.WriteString("\n💡 Los alias se guardan en alias.json\n")
 	help.WriteString("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
 
 	return help.String()

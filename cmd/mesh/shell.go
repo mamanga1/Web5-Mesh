@@ -48,7 +48,6 @@ func completer(d prompt.Document) []prompt.Suggest {
 			{Text: "acl", Description: "Gestión de nodos de confianza"},
 			{Text: "alias", Description: "Gestión de alias locales"},
 			{Text: "group", Description: "Gestión de grupos"},
-			{Text: "faro", Description: "Gestión de Faros"},
 			{Text: "help", Description: "Mostrar ayuda"},
 			{Text: "exit", Description: "Salir de la shell"},
 		}
@@ -88,25 +87,15 @@ func completer(d prompt.Document) []prompt.Suggest {
 				{Text: "info", Description: "Info de grupo"},
 			}
 		}
-	case "faro":
-		if len(words) == 1 {
-			return []prompt.Suggest{
-				{Text: "add", Description: "Agregar Faro"},
-				{Text: "list", Description: "Listar Faros"},
-				{Text: "remove", Description: "Eliminar Faro"},
-				{Text: "test", Description: "Probar Faros"},
-			}
-		}
 	}
 
 	s := []prompt.Suggest{}
 	allCommands := []string{
-		"whoami", "acl", "alias", "group", "faro", "help", "exit",
+		"whoami", "acl", "alias", "group", "help", "exit",
 		"acl add", "acl import", "acl remove", "acl list", "acl clear",
 		"alias add", "alias remove", "alias list",
 		"group create", "group list", "group send", "group add", "group remove",
 		"group invite", "group kick", "group leave", "group delete", "group info",
-		"faro add", "faro list", "faro remove", "faro test",
 	}
 
 	for _, cmd := range allCommands {
@@ -130,7 +119,7 @@ var (
 )
 
 // ============================================================================
-// LISTENER UDP (CON RESPUESTA AL FARO - ESTE ES EL ÚNICO CAMBIO)
+// LISTENER UDP
 // ============================================================================
 
 func startNetworkListener() {
@@ -195,29 +184,15 @@ func startNetworkListener() {
 
 		displayName := crypto.ResolveDID(peer.DID)
 
-		// === MANEJO DE MENSAJES DE GRUPO ===
 		if strings.HasPrefix(inner.Cmd, "GROUP:") {
 			parts := strings.SplitN(inner.Cmd, ":", 3)
 			if len(parts) == 3 {
 				fmt.Printf("\n💬 [GRUPO:%s] [%s]: %s\n", parts[1], displayName, parts[2])
-				
-				// >>> RESPUESTA AL FARO PARA MENSAJES DE GRUPO <<<
-				respText := "✅ Recibido en grupo"
-				respInner := InnerPayload{FromDID: globalID.DID, TS: time.Now().Unix(), Cmd: respText}
-				respPayload, _ := buildEncryptedPayload(globalID, peer.SharedKey, respInner)
-				globalConn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
 				continue
 			}
 		}
 
-		// === MANEJO DE MENSAJES NORMALES ===
 		fmt.Printf("\n💬 [%s]: %s\n", displayName, inner.Cmd)
-		
-		// >>> RESPUESTA AL FARO PARA MENSAJES NORMALES (LO QUE FALTABA) <<<
-		respText := handleCommand(inner.Cmd)
-		respInner := InnerPayload{FromDID: globalID.DID, TS: time.Now().Unix(), Cmd: respText}
-		respPayload, _ := buildEncryptedPayload(globalID, peer.SharedKey, respInner)
-		globalConn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
 	}
 }
 

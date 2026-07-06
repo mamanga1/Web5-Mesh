@@ -28,9 +28,7 @@ func cmdGroup(args []string, id *crypto.Identity) string {
 			return fmt.Sprintf("❌ Error creando grupo: %v", err)
 		}
 
-		sid := CreateSession("group", alias)
-
-		return fmt.Sprintf("✅ Grupo creado: %s (%s)\n✅ Sesión [%d] creada automáticamente", alias, name, sid)
+		return fmt.Sprintf("✅ Grupo creado: %s (%s)", alias, name)
 
 	case "list":
 		store, err := crypto.LoadGroups()
