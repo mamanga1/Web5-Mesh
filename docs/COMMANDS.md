@@ -69,59 +69,133 @@ xion@nodo:~$ ping did:maia:ABC123...
 
 ---
 
+## 🏷️ Alias Locales
+
+### `alias add <nombre> <did>`
+
+Crea un alias para un DID, para no tener que escribirlo completo.
+
+```
+xion@nodo:~$ alias add amigo did:maia:ABC123...
+✅ Alias 'amigo' creado para did:maia:ABC123...
+```
+
+### `alias list`
+
+Lista todos los alias guardados.
+
+```
+xion@nodo:~$ alias list
+📋 Alias guardados:
+  amigo → did:maia:ABC123...
+  casa → did:maia:DEF456...
+```
+
+### `alias remove <nombre>`
+
+Elimina un alias.
+
+```
+xion@nodo:~$ alias remove amigo
+✅ Alias 'amigo' eliminado
+```
+
+---
+
+## 👥 Grupos
+
+### `group create <alias> <nombre>`
+
+Crea un nuevo grupo. El alias es el identificador interno.
+
+```
+xion@nodo:~$ group create devs "Equipo de Desarrollo"
+✅ Grupo 'devs' creado: Equipo de Desarrollo
+```
+
+### `group list`
+
+Lista todos los grupos.
+
+```
+xion@nodo:~$ group list
+📋 Grupos:
+  [devs] Equipo de Desarrollo (3 miembros) - admin: did:maia:ABC...
+  [amigos] Grupo de Amigos (5 miembros) - admin: did:maia:DEF...
+```
+
+### `group add <alias> <did|alias>`
+
+Agrega un miembro al grupo (solo el admin puede hacerlo).
+
+```
+xion@nodo:~$ group add devs did:maia:XYZ789...
+✅ did:maia:XYZ789... agregado al grupo 'devs'
+📩 Sincronizado con todos los miembros
+```
+
+### `group remove <alias> [did|alias]`
+
+Sin segundo argumento: salís vos del grupo.
+Con segundo argumento: el admin remueve a otro miembro.
+
+```
+xion@nodo:~$ group remove devs
+✅ Saliste del grupo 'devs'
+
+xion@nodo:~$ group remove devs did:maia:XYZ789...
+✅ did:maia:XYZ789... removido del grupo 'devs'
+```
+
+### `group send <alias> <mensaje>`
+
+Envía un mensaje cifrado a todos los miembros del grupo.
+
+```
+xion@nodo:~$ group send devs "Reunión mañana a las 10"
+✅ Mensaje enviado a 3 miembros del grupo 'devs'
+```
+
+### `group delete <alias>`
+
+Elimina el grupo (solo el admin puede hacerlo).
+
+```
+xion@nodo:~$ group delete devs
+✅ Grupo 'devs' eliminado
+📩 Notificados todos los miembros
+```
+
+### `group info <alias>`
+
+Muestra información detallada del grupo.
+
+```
+xion@nodo:~$ group info devs
+📋 GRUPO: devs
+   Nombre: Equipo de Desarrollo
+   Admin: did:maia:ABC123...
+   Creado: 2026-07-01
+   Miembros (3):
+     - did:maia:ABC123...
+     - did:maia:DEF456...
+     - did:maia:XYZ789...
+```
+
+---
+
 ## 💬 Comunicación E2E
 
-### `chat <did> <mensaje>`
+### `chat <did|alias> <mensaje>`
 
 Envía un mensaje cifrado punto a punto a otro nodo.
 
 ```
 xion@nodo:~$ chat did:maia:ABC123... "Hola, ¿cómo estás?"
 ✅ Mensaje enviado y cifrado E2E
-```
 
----
-
-## 📻 Multitarea y Sesiones
-
-### `session list`
-
-Lista todas las sesiones activas.
-
-```
-xion@nodo:~$ session list
-📻 Sesiones activas:
-  [1] chat con did:maia:ABC123...
-  [2] ssh a did:maia:DEF456...
-```
-
-### `session new <tipo> <target>`
-
-Crea una nueva sesión (chat, ssh, etc.).
-
-```
-xion@nodo:~$ session new chat did:maia:ABC123...
-[CHAT] Modo conversación activado.
-Escribí tu mensaje o 'session detach' para salir.
-```
-
-### `session attach <id>`
-
-Se conecta a una sesión existente.
-
-```
-xion@nodo:~$ session attach 1
-[CHAT] Conectado a sesión con did:maia:ABC123...
-```
-
-### `session detach`
-
-Pone la sesión actual en background y vuelve al inicio.
-
-```
-[CHAT] > session detach
-📻 Sesión puesta en background.
-xion@nodo:~$
+xion@nodo:~$ chat amigo "Hola"
+✅ Mensaje enviado y cifrado E2E
 ```
 
 ---
@@ -206,10 +280,12 @@ Todos estos comandos operan **dentro de la Jaula de Faraday** (`~/.u2p/workspace
 
 Muestra la ayuda general o detallada de un tema específico.
 
+Temas disponibles: `acl`, `alias`, `group`, `chat`, `unix`, `docs`
+
 ```
-xion@nodo:~$ help session
+xion@nodo:~$ help alias
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  📻 AYUDA: SESIONES (Multitarea)
+  🏷️ AYUDA: ALIAS LOCALES
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   [guía paso a paso]
 ```
@@ -231,8 +307,5 @@ Sale de la shell de forma segura.
 xion@nodo:~$ exit
 👋 Sesión cerrada.
 ```
-
-
----
 
 *Referencia completa de comandos de XionIA - La Xión Digital 🦾*
