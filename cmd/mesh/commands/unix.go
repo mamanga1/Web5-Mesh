@@ -10,33 +10,40 @@ import (
 	"web5-mesh/src/crypto"
 )
 
-// getSecureDir devuelve la ruta a la bóveda soberana (multiplataforma)
+// getSecureDir devuelve la ruta a la bóveda soberana (relativa al directorio de ejecución)
 func getSecureDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".u2p/workspace"
-	}
-	return filepath.Join(home, ".u2p", "workspace")
+	return filepath.Join(".xion", "workspace")
 }
 
 func init() {
+	// Registrar comandos con y sin /
 	Register("/pwd", cmdPwd)
+	Register("pwd", cmdPwd)
 	Register("/ls", cmdLs)
+	Register("ls", cmdLs)
 	Register("/mkdir", cmdMkdir)
+	Register("mkdir", cmdMkdir)
 	Register("/cat", cmdCat)
+	Register("cat", cmdCat)
 	Register("/rm", cmdRm)
+	Register("rm", cmdRm)
 	Register("/rmdir", cmdRmdir)
+	Register("rmdir", cmdRmdir)
 	Register("/mv", cmdMv)
+	Register("mv", cmdMv)
 	Register("/cp", cmdCp)
+	Register("cp", cmdCp)
 	Register("/touch", cmdTouch)
+	Register("touch", cmdTouch)
 
 	// Crear el directorio si no existe al iniciar
 	workspaceDir := getSecureDir()
-	os.MkdirAll(workspaceDir, 0755)
+	os.MkdirAll(workspaceDir, 0700)
 }
 
 func cmdPwd(args []string, id *crypto.Identity) string {
-	return fmt.Sprintf("📂 %s", getSecureDir())
+	absPath, _ := filepath.Abs(getSecureDir())
+	return fmt.Sprintf("📂 %s", absPath)
 }
 
 func cmdLs(args []string, id *crypto.Identity) string {
@@ -47,7 +54,7 @@ func cmdLs(args []string, id *crypto.Identity) string {
 	}
 
 	if len(entries) == 0 {
-		return "📂 El directorio está vacío. Usa /mkdir <nombre> para crear algo."
+		return "📂 El directorio está vacío. Usa mkdir <nombre> para crear algo."
 	}
 
 	result := "📂 Contenido de tu espacio de trabajo:\n"
@@ -65,16 +72,16 @@ func cmdLs(args []string, id *crypto.Identity) string {
 
 func cmdMkdir(args []string, id *crypto.Identity) string {
 	if len(args) < 1 {
-		return "Uso: /mkdir <nombre_de_carpeta>"
+		return "Uso: mkdir <nombre_de_carpeta>"
 	}
 
 	dirName := args[0]
-	if dirName == ".." || dirName == "/" || dirName == "." || strings.Contains(dirName, "/") {
+	if dirName == ".." || dirName == "/" || dirName == "." || strings.Contains(dirName, "/") || strings.Contains(dirName, "\\") {
 		return "⚠️ Nombre de directorio no válido."
 	}
 
 	targetPath := filepath.Join(getSecureDir(), dirName)
-	err := os.MkdirAll(targetPath, 0755)
+	err := os.MkdirAll(targetPath, 0700)
 	if err != nil {
 		return fmt.Sprintf("❌ Error creando directorio: %v", err)
 	}
@@ -84,11 +91,11 @@ func cmdMkdir(args []string, id *crypto.Identity) string {
 
 func cmdCat(args []string, id *crypto.Identity) string {
 	if len(args) < 1 {
-		return "Uso: /cat <nombre_archivo>"
+		return "Uso: cat <nombre_archivo>"
 	}
 
 	fileName := args[0]
-	if strings.Contains(fileName, "/") || strings.Contains(fileName, "..") {
+	if strings.Contains(fileName, "/") || strings.Contains(fileName, "..") || strings.Contains(fileName, "\\") {
 		return "⚠️ Ruta no válida. Solo nombres de archivo en el directorio actual."
 	}
 
@@ -103,11 +110,11 @@ func cmdCat(args []string, id *crypto.Identity) string {
 
 func cmdRm(args []string, id *crypto.Identity) string {
 	if len(args) < 1 {
-		return "Uso: /rm <nombre_archivo>"
+		return "Uso: rm <nombre_archivo>"
 	}
 
 	fileName := args[0]
-	if strings.Contains(fileName, "/") || strings.Contains(fileName, "..") {
+	if strings.Contains(fileName, "/") || strings.Contains(fileName, "..") || strings.Contains(fileName, "\\") {
 		return "⚠️ Ruta no válida. Solo nombres de archivo en el directorio actual."
 	}
 
@@ -122,26 +129,26 @@ func cmdRm(args []string, id *crypto.Identity) string {
 
 func cmdRmdir(args []string, id *crypto.Identity) string {
 	if len(args) < 1 {
-		return "Uso: /rmdir <nombre_carpeta>"
+		return "Uso: rmdir <nombre_carpeta>"
 	}
 
 	dirName := args[0]
-	if dirName == ".." || dirName == "/" || dirName == "." || strings.Contains(dirName, "/") {
+	if dirName == ".." || dirName == "/" || dirName == "." || strings.Contains(dirName, "/") || strings.Contains(dirName, "\\") {
 		return "⚠️ Nombre de directorio no válido."
 	}
 
 	targetPath := filepath.Join(getSecureDir(), dirName)
-	
+
 	// Verificar que esté vacía
 	entries, err := os.ReadDir(targetPath)
 	if err != nil {
 		return fmt.Sprintf("❌ Error leyendo directorio: %v", err)
 	}
-	
+
 	if len(entries) > 0 {
 		return fmt.Sprintf("❌ El directorio no está vacío (tiene %d elementos). Borra el contenido primero.", len(entries))
 	}
-	
+
 	err = os.Remove(targetPath)
 	if err != nil {
 		return fmt.Sprintf("❌ Error borrando directorio: %v", err)
@@ -152,14 +159,14 @@ func cmdRmdir(args []string, id *crypto.Identity) string {
 
 func cmdMv(args []string, id *crypto.Identity) string {
 	if len(args) < 2 {
-		return "Uso: /mv <origen> <destino>"
+		return "Uso: mv <origen> <destino>"
 	}
 
 	srcName := args[0]
 	dstName := args[1]
 
-	if strings.Contains(srcName, "/") || strings.Contains(srcName, "..") ||
-		strings.Contains(dstName, "/") || strings.Contains(dstName, "..") {
+	if strings.Contains(srcName, "/") || strings.Contains(srcName, "..") || strings.Contains(srcName, "\\") ||
+		strings.Contains(dstName, "/") || strings.Contains(dstName, "..") || strings.Contains(dstName, "\\") {
 		return "⚠️ Rutas no válidas. Solo nombres en el directorio actual."
 	}
 
@@ -176,14 +183,14 @@ func cmdMv(args []string, id *crypto.Identity) string {
 
 func cmdCp(args []string, id *crypto.Identity) string {
 	if len(args) < 2 {
-		return "Uso: /cp <origen> <destino>"
+		return "Uso: cp <origen> <destino>"
 	}
 
 	srcName := args[0]
 	dstName := args[1]
 
-	if strings.Contains(srcName, "/") || strings.Contains(srcName, "..") ||
-		strings.Contains(dstName, "/") || strings.Contains(dstName, "..") {
+	if strings.Contains(srcName, "/") || strings.Contains(srcName, "..") || strings.Contains(srcName, "\\") ||
+		strings.Contains(dstName, "/") || strings.Contains(dstName, "..") || strings.Contains(dstName, "\\") {
 		return "⚠️ Rutas no válidas. Solo nombres en el directorio actual."
 	}
 
@@ -196,7 +203,7 @@ func cmdCp(args []string, id *crypto.Identity) string {
 	}
 	defer srcFile.Close()
 
-	dstFile, err := os.Create(dstPath)
+	dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Sprintf("❌ No se pudo crear destino: %v", err)
 	}
@@ -212,18 +219,18 @@ func cmdCp(args []string, id *crypto.Identity) string {
 
 func cmdTouch(args []string, id *crypto.Identity) string {
 	if len(args) < 1 {
-		return "Uso: /touch <nombre_archivo>"
+		return "Uso: touch <nombre_archivo>"
 	}
 
 	fileName := args[0]
-	if strings.Contains(fileName, "/") || strings.Contains(fileName, "..") {
+	if strings.Contains(fileName, "/") || strings.Contains(fileName, "..") || strings.Contains(fileName, "\\") {
 		return "⚠️ Nombre no válido."
 	}
 
 	targetPath := filepath.Join(getSecureDir(), fileName)
-	
-	// Crear archivo vacío o actualizar timestamp
-	file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY, 0644)
+
+	// Crear archivo vacío o actualizar timestamp con permisos 0600
+	file, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Sprintf("❌ Error creando archivo: %v", err)
 	}

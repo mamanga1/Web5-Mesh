@@ -84,6 +84,7 @@ func cmdHelp(args []string, id *crypto.Identity) string {
 	help.WriteString("  SISTEMA:\n")
 	help.WriteString("    help                       - Este mensaje\n")
 	help.WriteString("    help <tema>                - Ayuda detallada (ej: help alias, unix, docs)\n")
+	help.WriteString("    clear                      - Borrar identidad y ACL (⚠️ IRREVERSIBLE)\n")
 	help.WriteString("    exit                       - Salir de la consola asegurada\n\n")
 
 	help.WriteString("🔒 NOTA DE SEGURIDAD:\n")
