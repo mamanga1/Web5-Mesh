@@ -184,6 +184,58 @@ func startNetworkListener() {
 
 		displayName := crypto.ResolveDID(peer.DID)
 
+		// ====================================================================
+		// SINCRONIZACIÓN DE GRUPOS
+		// ====================================================================
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_SYNC:") {
+			parts := strings.SplitN(inner.Cmd, ":", 3)
+			if len(parts) == 3 {
+				alias := parts[1]
+				var group crypto.Group
+				if json.Unmarshal([]byte(parts[2]), &group) == nil {
+					crypto.SaveGroupDirect(alias, &group)
+					fmt.Printf("\n🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)\n", alias, len(group.Members))
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_DELETE:") {
+			parts := strings.SplitN(inner.Cmd, ":", 2)
+			if len(parts) == 2 {
+				alias := parts[1]
+				crypto.DeleteGroup(alias)
+				fmt.Printf("\n🗑️ [SISTEMA] Grupo '%s' eliminado por el admin\n", alias)
+			}
+			continue
+		}
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_KICKED:") {
+			parts := strings.SplitN(inner.Cmd, ":", 2)
+			if len(parts) == 2 {
+				alias := parts[1]
+				crypto.RemoveMember(alias, globalID.DID)
+				fmt.Printf("\n👢 [SISTEMA] Fuiste expulsado del grupo '%s'\n", alias)
+			}
+			continue
+		}
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_LEAVE:") {
+			parts := strings.SplitN(inner.Cmd, ":", 3)
+			if len(parts) == 3 {
+				alias := parts[1]
+				did := parts[2]
+				crypto.RemoveMember(alias, did)
+				fmt.Printf("\n👋 [SISTEMA] %s salió del grupo '%s'\n", displayName, alias)
+			}
+			continue
+		}
+
+		// ====================================================================
+		// MENSAJES DE CHAT DE GRUPO
+		// ====================================================================
+
 		if strings.HasPrefix(inner.Cmd, "GROUP:") {
 			parts := strings.SplitN(inner.Cmd, ":", 3)
 			if len(parts) == 3 {

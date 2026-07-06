@@ -81,11 +81,6 @@ func cmdHelp(args []string, id *crypto.Identity) string {
 	help.WriteString("    edit <archivo>             - Editor de texto blindado (usa :wq para guardar)\n")
 	help.WriteString("    💡 Tip: Escribe 'help unix' para ver todos los comandos\n\n")
 
-	help.WriteString("  NOTIFICACIONES:\n")
-	help.WriteString("    /notif on                  - Activar notificaciones\n")
-	help.WriteString("    /notif off                 - Desactivar notificaciones (Modo Zen)\n")
-	help.WriteString("    /notif                     - Ver estado actual\n\n")
-
 	help.WriteString("  SISTEMA:\n")
 	help.WriteString("    help                       - Este mensaje\n")
 	help.WriteString("    help <tema>                - Ayuda detallada (ej: help alias, unix, docs)\n")
