@@ -12,11 +12,6 @@ func init() {
 }
 
 func cmdClear(args []string, id *crypto.Identity) string {
-	// Rechazar argumentos
-	if len(args) > 0 {
-		return "❌ Uso: clear (sin argumentos)\n   Este comando borra tu identidad y ACL."
-	}
-
 	// Verificar si los archivos existen
 	_, errKey := os.Stat("node.key")
 	_, errACL := os.Stat("acl.json")
@@ -25,13 +20,9 @@ func cmdClear(args []string, id *crypto.Identity) string {
 		return "ℹ️ No hay archivos de identidad ni ACL para borrar."
 	}
 
-	// Pedir confirmación
-	fmt.Print("⚠️  ¿Estás seguro? Esto borrará tu identidad y ACL. (s/n): ")
-	var confirm string
-	fmt.Scanln(&confirm)
-	
-	if confirm != "s" && confirm != "S" && confirm != "si" && confirm != "SI" {
-		return "❌ Operación cancelada."
+	// Requerir flag --force para confirmar
+	if len(args) == 0 || args[0] != "--force" {
+		return "⚠️  Este comando borra tu identidad y ACL.\n   Usá 'clear --force' para confirmar."
 	}
 
 	// Borrar node.key (identidad)
