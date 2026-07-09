@@ -48,6 +48,7 @@ func completer(d prompt.Document) []prompt.Suggest {
 			{Text: "acl", Description: "Gestión de nodos de confianza"},
 			{Text: "alias", Description: "Gestión de alias locales"},
 			{Text: "group", Description: "Gestión de grupos"},
+                        {Text: "faro", Description: "Gestión de faro"},
 			{Text: "help", Description: "Mostrar ayuda"},
 			{Text: "exit", Description: "Salir de la shell"},
 		}
@@ -91,11 +92,12 @@ func completer(d prompt.Document) []prompt.Suggest {
 
 	s := []prompt.Suggest{}
 	allCommands := []string{
-		"whoami", "acl", "alias", "group", "help", "exit",
+		"whoami", "acl", "alias", "group", "faro", "help", "exit",
 		"acl add", "acl import", "acl remove", "acl list", "acl clear",
 		"alias add", "alias remove", "alias list",
 		"group create", "group list", "group send", "group add", "group remove",
 		"group invite", "group kick", "group leave", "group delete", "group info",
+                "faro set", "faro reset",
 	}
 
 	for _, cmd := range allCommands {
@@ -285,7 +287,7 @@ func runInteractiveShell() {
 
 	crypto.SetSelfDID(globalID.DID)
 
-	globalFaroAddr = FaroAddr
+	globalFaroAddr = getFaroAddr()
 
 	if globalFaroAddr != "" {
 		faroAddr, _ := net.ResolveUDPAddr("udp", globalFaroAddr)
@@ -327,6 +329,7 @@ func runInteractiveShell() {
 			prompt.OptionSuggestionTextColor(prompt.White),
 			prompt.OptionSelectedSuggestionBGColor(prompt.Yellow),
 			prompt.OptionSelectedSuggestionTextColor(prompt.Black),
+                        prompt.OptionMaxSuggestion(10),
 		)
 
 		input = strings.TrimSpace(input)
