@@ -434,6 +434,7 @@ func runInteractiveShell() {
                         prompt.OptionSuggestionTextColor(prompt.White),
                         prompt.OptionSelectedSuggestionBGColor(prompt.Yellow),
                         prompt.OptionSelectedSuggestionTextColor(prompt.Black),
+                        prompt.OptionHistory([]string{}),
                 )
 
                 input = strings.TrimSpace(input)
