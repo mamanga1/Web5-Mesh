@@ -1,6 +1,7 @@
 package main
 
 import (
+        "crypto/tls"
         "encoding/base64"
         "encoding/hex"
         "encoding/json"
@@ -13,12 +14,19 @@ import (
         "strings"
         "time"
 
+        "github.com/gorilla/websocket"
         "web5-mesh/cmd/mesh/commands"
         "web5-mesh/src/config"
         "web5-mesh/src/crypto"
 )
 
 const ListenPort = "54321"
+
+var (
+        connWS       *websocket.Conn
+        connUDP      *net.UDPConn
+        useWebSocket bool
+)
 
 func getFaroAddr() string {
         return config.GetFaroAddr()
@@ -48,6 +56,11 @@ func extractPayload(raw string) string {
                         return fields[3]
                 }
         } else if strings.HasPrefix(raw, "RESPONSE ") {
+                fields := strings.Fields(raw)
+                if len(fields) >= 3 {
+                        return fields[2]
+                }
+        } else if strings.HasPrefix(raw, "ACK ") {
                 fields := strings.Fields(raw)
                 if len(fields) >= 3 {
                         return fields[2]
@@ -120,10 +133,78 @@ func handleCommand(cmd string) string {
 }
 
 // ============================================================
-// ExecuteRealCommand - VERSIÓN CON RELAY (LA QUE FUNCIONABA)
+// CONEXIÓN AL FARO - DETECCIÓN AUTOMÁTICA POR PUERTO
 // ============================================================
+
+func connectToFaro() error {
+        faroAddr := getFaroAddr()
+        
+        // ✅ DETECTAR POR PUERTO: 443 = WebSocket, otro = UDP
+        if strings.Contains(faroAddr, ":443") || strings.Contains(faroAddr, ":8443") {
+                // WebSocket
+                wsURL := fmt.Sprintf("wss://%s/ws", faroAddr)
+                dialer := websocket.Dialer{
+                        TLSClientConfig: &tls.Config{
+                                InsecureSkipVerify: true,
+                        },
+                        HandshakeTimeout: 5 * time.Second,
+                }
+                wsConn, _, err := dialer.Dial(wsURL, nil)
+                if err != nil {
+                        return fmt.Errorf("error conectando WebSocket: %v", err)
+                }
+                connWS = wsConn
+                useWebSocket = true
+                fmt.Printf("✅ Conectado al faro por WebSocket: %s\n", faroAddr)
+                return nil
+        }
+
+        // UDP (directo, sin fallback innecesario)
+        addr, err := net.ResolveUDPAddr("udp", faroAddr)
+        if err != nil {
+                return fmt.Errorf("error resolviendo faro UDP: %v", err)
+        }
+        conn, err := net.DialUDP("udp", nil, addr)
+        if err != nil {
+                return fmt.Errorf("error conectando UDP: %v", err)
+        }
+        connUDP = conn
+        useWebSocket = false
+        fmt.Printf("✅ Conectado al faro por UDP: %s\n", faroAddr)
+        return nil
+}
+
+func sendToFaro(msg string) error {
+        if useWebSocket {
+                return connWS.WriteMessage(websocket.TextMessage, []byte(msg))
+        }
+        _, err := connUDP.Write([]byte(msg))
+        return err
+}
+
+func readFromFaro() (string, error) {
+        if useWebSocket {
+                _, message, err := connWS.ReadMessage()
+                if err != nil {
+                        return "", err
+                }
+                return string(message), nil
+        }
+        
+        buf := make([]byte, 4096)
+        connUDP.SetReadDeadline(time.Now().Add(15 * time.Second))
+        n, _, err := connUDP.ReadFromUDP(buf)
+        if err != nil {
+                return "", err
+        }
+        return string(buf[:n]), nil
+}
+
+// ============================================================
+// ExecuteRealCommand - VERSIÓN CON ACK ASÍNCRONO
+// ============================================================
+
 func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string {
-        // 1. Cargar ACL y obtener claves del peer
         acl, err := crypto.LoadACL()
         if err != nil {
                 return fmt.Sprintf("❌ Error cargando ACL: %v", err)
@@ -134,13 +215,11 @@ func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string
                 return "❌ DID no encontrado en tu acl.json."
         }
 
-        // 2. Derivar clave compartida
         sharedKey, err := crypto.DeriveSharedKey(myID.PrivKeyX, pubX)
         if err != nil {
                 return fmt.Sprintf("❌ Error derivando clave: %v", err)
         }
 
-        // 3. Construir payload cifrado
         inner := InnerPayload{
                 FromDID: myID.DID,
                 TS:      time.Now().Unix(),
@@ -152,43 +231,36 @@ func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string
                 return fmt.Sprintf("❌ Error cifrando: %v", err)
         }
 
-        // 4. Conectar al Faro
-        faroAddr, err := net.ResolveUDPAddr("udp", getFaroAddr())
-        if err != nil {
-                return fmt.Sprintf("❌ Error resolviendo Faro: %v", err)
-        }
-
-        conn, err := net.DialUDP("udp", nil, faroAddr)
-        if err != nil {
+        if err := connectToFaro(); err != nil {
                 return fmt.Sprintf("❌ Error conectando al Faro: %v", err)
         }
-        defer conn.Close()
+        
+        if useWebSocket {
+                defer connWS.Close()
+        } else {
+                defer connUDP.Close()
+        }
 
-        // 5. Enviar RELAY al Faro (la versión que funcionaba)
         relayCmd := fmt.Sprintf("RELAY %s %s %s", targetDID, myID.DID, addPadding(payload))
-        conn.Write([]byte(relayCmd))
-
-        // 6. Esperar respuesta del Faro (que reenvía la respuesta del destino)
-        conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-        buf := make([]byte, 4096)
-        n, _, err := conn.ReadFromUDP(buf)
-        if err != nil {
-                return "⏳ Timeout: El nodo destino no respondió a tiempo"
+        if err := sendToFaro(relayCmd); err != nil {
+                return fmt.Sprintf("❌ Error enviando: %v", err)
         }
 
-        // 7. Procesar respuesta
-        respRaw := stripPadding(string(buf[:n]))
-        respRaw = extractPayload(respRaw)
-        parts := strings.SplitN(respRaw, "|", 2)
-        if len(parts) == 2 {
-                ciphertext, _ := base64.StdEncoding.DecodeString(parts[1])
-                plaintext, _ := crypto.DecryptPayload(sharedKey, ciphertext)
-                var innerResp InnerPayload
-                if json.Unmarshal(plaintext, &innerResp) == nil {
-                        return fmt.Sprintf("📩 %s", innerResp.Cmd)
+        // ✅ Esperar ACK con timeout corto (2 segundos)
+        ackChan := make(chan bool, 1)
+        go func() {
+                respRaw, err := readFromFaro()
+                if err == nil && strings.HasPrefix(respRaw, "ACK") {
+                        ackChan <- true
                 }
+        }()
+        
+        select {
+        case <-ackChan:
+                return "✅ Mensaje entregado"
+        case <-time.After(2 * time.Second):
+                return "📤 Mensaje enviado (sin confirmación)"
         }
-        return fmt.Sprintf("📩 Respuesta cruda: %s", respRaw)
 }
 
 func init() {
@@ -203,9 +275,16 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
         }
 
         sharedKey, _ := crypto.DeriveSharedKey(myID.PrivKeyX, pubX)
-        faroAddr, _ := net.ResolveUDPAddr("udp", getFaroAddr())
-        conn, _ := net.DialUDP("udp", nil, faroAddr)
-        defer conn.Close()
+        
+        if err := connectToFaro(); err != nil {
+                log.Fatalf("❌ Error conectando al Faro: %v", err)
+        }
+        
+        if useWebSocket {
+                defer connWS.Close()
+        } else {
+                defer connUDP.Close()
+        }
 
         inner := InnerPayload{FromDID: myID.DID, TS: time.Now().Unix(), Cmd: command}
         payload, err := buildEncryptedPayload(myID, sharedKey, inner)
@@ -213,16 +292,16 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
                 log.Fatalf("❌ Error cifrando: %v", err)
         }
 
-        conn.Write([]byte(fmt.Sprintf("RELAY %s %s %s", targetDID, myID.DID, addPadding(payload))))
+        if err := sendToFaro(fmt.Sprintf("RELAY %s %s %s", targetDID, myID.DID, addPadding(payload))); err != nil {
+                log.Fatalf("❌ Error enviando: %v", err)
+        }
 
-        conn.SetReadDeadline(time.Now().Add(15 * time.Second))
-        buf := make([]byte, 4096)
-        n, _, err := conn.ReadFromUDP(buf)
+        respRaw, err := readFromFaro()
         if err != nil {
                 log.Fatalf("⏳ Timeout esperando respuesta")
         }
 
-        respRaw := stripPadding(string(buf[:n]))
+        respRaw = stripPadding(respRaw)
         respRaw = extractPayload(respRaw)
         parts := strings.SplitN(respRaw, "|", 2)
         if len(parts) == 2 {
@@ -242,27 +321,32 @@ func runNode(myID *crypto.Identity) {
         fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando...\n", len(aclIndex))
         fmt.Println("📡 Keep-alive activo cada 15s.")
 
-        faroAddr, _ := net.ResolveUDPAddr("udp", getFaroAddr())
-        conn, _ := net.DialUDP("udp", nil, faroAddr)
-        defer conn.Close()
+        if err := connectToFaro(); err != nil {
+                log.Fatalf("❌ Error conectando al Faro: %v", err)
+        }
+        
+        if useWebSocket {
+                defer connWS.Close()
+        } else {
+                defer connUDP.Close()
+        }
 
         go func() {
                 for {
                         ts := fmt.Sprintf("%d", time.Now().Unix())
                         msg := fmt.Sprintf("ANNOUNCE %s %s %s", myID.DID, ts, base64.StdEncoding.EncodeToString(myID.SignMessage([]byte(ts))))
-                        conn.Write([]byte(addPadding(msg)))
+                        sendToFaro(addPadding(msg))
                         time.Sleep(15 * time.Second)
                 }
         }()
 
-        buf := make([]byte, 4096)
         for {
-                n, _, err := conn.ReadFromUDP(buf)
+                raw, err := readFromFaro()
                 if err != nil {
                         continue
                 }
 
-                raw := stripPadding(string(buf[:n]))
+                raw = stripPadding(raw)
                 raw = extractPayload(raw)
                 parts := strings.SplitN(raw, "|", 2)
                 if len(parts) != 2 {
@@ -307,7 +391,7 @@ func runNode(myID *crypto.Identity) {
                 respInner := InnerPayload{FromDID: myID.DID, TS: time.Now().Unix(), Cmd: respText}
                 respPayload, _ := buildEncryptedPayload(myID, peer.SharedKey, respInner)
 
-                conn.Write([]byte(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload))))
+                sendToFaro(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload)))
         }
 }
 
