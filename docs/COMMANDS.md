@@ -1,8 +1,17 @@
 # XionIA - Referencia Completa de Comandos
 
-## Identidad y Confianza
+## 📌 LEYENDA DE ESTADO
 
-### `whoami`
+| Icono | Significado |
+|:-----:|:------------|
+| ✅ | Comando 100% funcional |
+| 🚧 | En desarrollo |
+
+---
+
+## 🆔 Identidad y Confianza
+
+### `whoami` ✅
 
 Muestra tu identidad actual, DID y claves públicas.
 
@@ -17,61 +26,58 @@ xion@nodo:~$ whoami
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-### `acl list`
+### `acl list` ✅
 
 Lista todos los nodos en tu lista de confianza (ACL).
 
 ```
 xion@nodo:~$ acl list
-📋 Nodos en tu lista de confianza:
-  1. did:maia:ABC123... (alias: nodo-amigo)
-  2. did:maia:DEF456... (alias: servidor-casa)
+📋 NODOS DE CONFIANZA (ACL):
+  ✅ did:maia:ABC123...
+  ✅ did:maia:DEF456...
 ```
 
-### `acl import <did> <ed_pubkey> <x_pubkey>`
+### `acl import <did> <ed_pubkey> <x_pubkey>` ✅
 
-Agrega un nodo a tu lista de confianza.
+Agrega un nodo a tu lista de confianza importando sus claves.
 
 ```
 xion@nodo:~$ acl import did:maia:ABC123... ed_pubkey_hex x_pubkey_hex
 ✅ Nodo agregado a tu ACL
 ```
 
-### `status`
+### `acl add <did>` ✅
 
-Muestra el estado de la red y los pares configurados.
-
-```
-xion@nodo:~$ status
-🛡️ [NODO] ACL indexada con 3 pares. Escuchando y listo.
-```
-
-### `status clear`
-
-Limpia la lista de pares de confianza (no borra tu identidad).
+Agrega un nodo a tu ACL (si ya lo conoces).
 
 ```
-xion@nodo:~$ status clear
-✅ ACL limpiada. Reiniciá la shell para aplicar.
+xion@nodo:~$ acl add did:maia:ABC123...
+✅ Nodo agregado a tu ACL
 ```
 
-### `ping <did>`
+### `acl remove <did>` ✅
 
-Prueba la conexión con otro nodo y deriva la clave E2E.
+Elimina un nodo de tu ACL.
 
 ```
-xion@nodo:~$ ping did:maia:ABC123...
-📡 Ping a did:maia:ABC123...
-   ├── RTT: 45ms
-   ├── Clave E2E derivada: ✅
-   └── Estado: Conectado
+xion@nodo:~$ acl remove did:maia:ABC123...
+✅ Nodo eliminado de tu ACL
+```
+
+### `acl clear` ✅
+
+Limpia toda tu ACL (no borra tu identidad).
+
+```
+xion@nodo:~$ acl clear
+✅ ACL limpiada
 ```
 
 ---
 
 ## 🏷️ Alias Locales
 
-### `alias add <nombre> <did>`
+### `alias add <nombre> <did>` ✅
 
 Crea un alias para un DID, para no tener que escribirlo completo.
 
@@ -80,18 +86,18 @@ xion@nodo:~$ alias add amigo did:maia:ABC123...
 ✅ Alias 'amigo' creado para did:maia:ABC123...
 ```
 
-### `alias list`
+### `alias list` ✅
 
 Lista todos los alias guardados.
 
 ```
 xion@nodo:~$ alias list
-📋 Alias guardados:
+📋 ALIAS GUARDADOS:
   amigo → did:maia:ABC123...
   casa → did:maia:DEF456...
 ```
 
-### `alias remove <nombre>`
+### `alias remove <nombre>` ✅
 
 Elimina un alias.
 
@@ -104,105 +110,115 @@ xion@nodo:~$ alias remove amigo
 
 ## 👥 Grupos
 
-### `group create <alias> <nombre>`
+### `group create <alias> <nombre>` ✅
 
 Crea un nuevo grupo. El alias es el identificador interno.
 
 ```
 xion@nodo:~$ group create devs "Equipo de Desarrollo"
-✅ Grupo 'devs' creado: Equipo de Desarrollo
+✅ Grupo creado: devs ("Equipo de Desarrollo")
 ```
 
-### `group list`
+### `group list` ✅
 
 Lista todos los grupos.
 
 ```
 xion@nodo:~$ group list
-📋 Grupos:
-  [devs] Equipo de Desarrollo (3 miembros) - admin: did:maia:ABC...
-  [amigos] Grupo de Amigos (5 miembros) - admin: did:maia:DEF...
+📋 GRUPOS:
+  [devs] "Equipo de Desarrollo" (3 miembros) - admin: did:maia:ABC...
+  [pruebas] "Grupo de Prueba" (2 miembros) - admin: yo
 ```
 
-### `group add <alias> <did|alias>`
+### `group add <alias> <did|alias>` ✅
 
 Agrega un miembro al grupo (solo el admin puede hacerlo).
 
 ```
 xion@nodo:~$ group add devs did:maia:XYZ789...
-✅ did:maia:XYZ789... agregado al grupo 'devs'
-📩 Sincronizado con todos los miembros
+✅ did:maia:XYZ789... agregado al grupo devs
+📩 Grupo sincronizado con el nuevo miembro
 ```
 
-### `group remove <alias> [did|alias]`
+### `group remove <alias> [did|alias]` ✅
 
-Sin segundo argumento: salís vos del grupo.
-Con segundo argumento: el admin remueve a otro miembro.
+**Sin argumentos:** sales del grupo.  
+**Con argumento:** el admin remueve a otro miembro.
 
 ```
 xion@nodo:~$ group remove devs
 ✅ Saliste del grupo 'devs'
 
 xion@nodo:~$ group remove devs did:maia:XYZ789...
-✅ did:maia:XYZ789... removido del grupo 'devs'
+✅ Miembro removido del grupo 'devs'
 ```
 
-### `group send <alias> <mensaje>`
+**Nota:** `group kick` no es un comando separado; se usa `group remove` con el DID del miembro a expulsar.
+
+### `group send <alias> <mensaje>` ✅
 
 Envía un mensaje cifrado a todos los miembros del grupo.
 
 ```
 xion@nodo:~$ group send devs "Reunión mañana a las 10"
-✅ Mensaje enviado a 3 miembros del grupo 'devs'
+✅ Mensaje enviado al grupo devs (3 miembros)
 ```
 
-### `group delete <alias>`
+### `group delete <alias>` ✅
 
-Elimina el grupo (solo el admin puede hacerlo).
+Elimina el grupo (solo admin).
 
 ```
 xion@nodo:~$ group delete devs
 ✅ Grupo 'devs' eliminado
-📩 Notificados todos los miembros
 ```
 
-### `group info <alias>`
+### `group info <alias>` ✅
 
 Muestra información detallada del grupo.
 
 ```
 xion@nodo:~$ group info devs
 📋 GRUPO: devs
-   Nombre: Equipo de Desarrollo
-   Admin: did:maia:ABC123...
-   Creado: 2026-07-01
+   Nombre: "Equipo de Desarrollo"
+   Admin: yo
+   Creado: 2026-07-10
    Miembros (3):
-     - did:maia:ABC123...
-     - did:maia:DEF456...
-     - did:maia:XYZ789...
+     - yo
+     - amigo
+     - otro
+```
+
+### `group leave <alias>` ✅
+
+Sales del grupo (cualquier miembro puede hacerlo).
+
+```
+xion@nodo:~$ group leave devs
+✅ Saliste del grupo 'devs'
 ```
 
 ---
 
 ## 💬 Comunicación E2E
 
-### `chat <did|alias> <mensaje>`
+### `chat <did|alias> <mensaje>` ✅
 
 Envía un mensaje cifrado punto a punto a otro nodo.
 
 ```
-xion@nodo:~$ chat did:maia:ABC123... "Hola, ¿cómo estás?"
-✅ Mensaje enviado y cifrado E2E
-
-xion@nodo:~$ chat amigo "Hola"
-✅ Mensaje enviado y cifrado E2E
+xion@nodo:~$ chat amigo "Hola, ¿cómo estás?"
+🔗 Alias resuelto: amigo → did:maia:ABC123...
+✅ Conectado al faro por UDP: 190.220.45.26:54321
+✅ Mensaje entregado
+💬 [amigo]: CHAT:Hola, todo bien
 ```
 
 ---
 
 ## 🛡️ Jaula de Faraday (Bóveda Soberana)
 
-### `import <ruta_host>`
+### `import <ruta_host>` ✅
 
 Mete un archivo del host a la bóveda soberana.
 
@@ -210,25 +226,37 @@ Mete un archivo del host a la bóveda soberana.
 xion@nodo:~$ import ~/documento.pdf
 ✅ Archivo ingresado a la bóveda:
    ├── Origen: /home/usuario/documento.pdf
-   ├── Destino: /home/usuario/.u2p/workspace/documento.pdf
+   ├── Destino: /home/usuario/.xion/workspace/documento.pdf
    └── Permisos: 0600 (solo tú)
 ```
 
-### `sign <archivo>`
+### `export <archivo> [ruta_destino]` ✅
+
+Saca un archivo de la bóveda al host.
+
+```
+xion@nodo:~$ export documento.pdf ~/Desktop/
+✅ Archivo exportado de la bóveda:
+   ├── Origen (Bóveda): ~/.xion/workspace/documento.pdf
+   ├── Destino (Host): ~/Desktop/documento.pdf
+   └── Permisos: 0644
+```
+
+### `sign <archivo>` ✅
 
 Firma criptográficamente un archivo (SHA256 + Ed25519).
 
 ```
 xion@nodo:~$ sign documento.pdf
 ✅ Archivo firmado criptográficamente:
-   ├── Archivo: documento.pdf (23 bytes)
+   ├── Archivo: documento.pdf
    ├── Hash SHA256: 2ee498c8fa0f778e...
    ├── Firma: documento.pdf.sig
    ├── Firmante: did:maia:5XVNWhUtMNH...
-   └── Timestamp: 2026-06-17 11:21:15
+   └── Timestamp: 2026-07-10 18:30:00
 ```
 
-### `verify <archivo>`
+### `verify <archivo>` ✅
 
 Verifica integridad y autenticidad de un archivo firmado.
 
@@ -241,71 +269,175 @@ xion@nodo:~$ verify documento.pdf
    └── El archivo es auténtico y no fue modificado.
 ```
 
-### `export <archivo> [ruta_destino]`
-
-Saca un archivo de la bóveda al host.
-
-```
-xion@nodo:~$ export documento.pdf ~/Desktop/
-✅ Archivo exportado de la bóveda:
-   ├── Origen (Bóveda): ~/.u2p/workspace/documento.pdf
-   ├── Destino (Host): ~/Desktop/documento.pdf
-   └── Permisos: 0644
-```
-
 ---
 
 ## 📂 Comandos Unix (en la bóveda)
 
-Todos estos comandos operan **dentro de la Jaula de Faraday** (`~/.u2p/workspace/`).
+Todos estos comandos operan **dentro de la Jaula de Faraday** (`~/.xion/workspace/`).
 
-| Comando | Descripción | Ejemplo |
-|:--------|:------------|:--------|
-| `/ls` | Lista el contenido de la bóveda | `/ls` |
-| `/cat <archivo>` | Muestra el contenido de un archivo | `/cat notas.txt` |
-| `/rm <archivo>` | Borra un archivo de la bóveda | `/rm viejo.pdf` |
-| `/rmdir <carpeta>` | Borra una carpeta vacía | `/rmdir tmp/` |
-| `/mv <origen> <destino>` | Mueve o renombra un archivo | `/mv doc.pdf backup.pdf` |
-| `/cp <origen> <destino>` | Copia un archivo dentro de la bóveda | `/cp doc.pdf copia.pdf` |
-| `/touch <archivo>` | Crea un archivo vacío | `/touch nuevo.txt` |
-| `/mkdir <carpeta>` | Crea una carpeta en la bóveda | `/mkdir proyectos/` |
-| `/edit <archivo>` | Editor de texto integrado. Usá `:wq` para guardar. | `/edit config.txt` |
-| `/pwd` | Muestra el directorio actual de la bóveda | `/pwd` |
+### `pwd` ✅
+
+Muestra el directorio actual de la bóveda.
+
+```
+xion@nodo:~$ pwd
+📂 /home/usuario/.xion/workspace
+```
+
+### `ls` ✅
+
+Lista el contenido de la bóveda.
+
+```
+xion@nodo:~$ ls
+📂 Contenido de tu espacio de trabajo:
+  📁 proyectos/
+  📄 documento.pdf (2345 bytes)
+```
+
+### `mkdir <nombre>` ✅
+
+Crea una carpeta en la bóveda.
+
+```
+xion@nodo:~$ mkdir proyectos
+✅ Directorio 'proyectos' creado en tu espacio soberano.
+```
+
+### `cat <archivo>` ✅
+
+Muestra el contenido de un archivo.
+
+```
+xion@nodo:~$ cat notas.txt
+📄 --- notas.txt ---
+Hoy es un buen día para la soberanía digital.
+--- FIN ---
+```
+
+### `rm <archivo>` ✅
+
+Borra un archivo de la bóveda.
+
+```
+xion@nodo:~$ rm viejo.txt
+✅ Archivo 'viejo.txt' borrado.
+```
+
+### `rmdir <carpeta>` ✅
+
+Borra una carpeta vacía.
+
+```
+xion@nodo:~$ rmdir tmp/
+✅ Directorio 'tmp' borrado.
+```
+
+### `mv <origen> <destino>` ✅
+
+Mueve o renombra un archivo dentro de la bóveda.
+
+```
+xion@nodo:~$ mv doc.pdf backup.pdf
+✅ 'doc.pdf' movido a 'backup.pdf'.
+```
+
+### `cp <origen> <destino>` ✅
+
+Copia un archivo dentro de la bóveda.
+
+```
+xion@nodo:~$ cp doc.pdf copia.pdf
+✅ 'doc.pdf' copiado a 'copia.pdf'.
+```
+
+### `touch <archivo>` ✅
+
+Crea un archivo vacío o actualiza su timestamp.
+
+```
+xion@nodo:~$ touch nuevo.txt
+✅ Archivo 'nuevo.txt' creado/actualizado.
+```
+
+### `/edit` ✅
+
+Editor de texto integrado (usa `:wq` para guardar y salir).
+
+```
+xion@nodo:~$ edit config.txt
+(abre el editor)
+:wq  (para guardar y salir)
+✅ Archivo guardado.
+```
+
+**Nota:** Todos los comandos Unix aceptan tanto la versión con `/` (ej: `/ls`) como sin él (ej: `ls`).
 
 ---
 
 ## 🔧 Sistema
 
-### `help` / `help <tema>`
+### `help` / `help <tema>` ✅
 
 Muestra la ayuda general o detallada de un tema específico.
 
-Temas disponibles: `acl`, `alias`, `group`, `chat`, `unix`, `docs`
-
 ```
-xion@nodo:~$ help alias
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  🏷️ AYUDA: ALIAS LOCALES
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  [guía paso a paso]
+xion@nodo:~$ help
 ```
 
-### `clear`
-
-**⚠️ PELIGRO:** Borra tu identidad y ACL completamente. Irreversible.
-
-```
-xion@nodo:~$ clear
-⚠️ ¿Estás seguro? Esta acción borrará tu identidad y ACL. (s/n)
-```
-
-### `exit`
+### `exit` ✅
 
 Sale de la shell de forma segura.
 
 ```
 xion@nodo:~$ exit
 👋 Sesión cerrada.
+mamanga@node-379-core:~/Web5-Mesh$
 ```
+
+**Comportamiento:**
+- ✅ Cierra la conexión con el faro
+- ✅ Cierra los canales de comunicación
+- ✅ Restaura la terminal a su estado original
+- ✅ Vuelve al shell del sistema
+
+### `faro set <addr>` ✅
+
+Configura la dirección del faro.
+
+```
+xion@nodo:~$ faro set 190.220.45.26:54321
+✅ Faro configurado: 190.220.45.26:54321
+```
+
+### `faro reset` ✅
+
+Resetea la configuración del faro.
+
+```
+xion@nodo:~$ faro reset
+✅ Faro reseteado
+```
+
+### `clear` ⚠️
+
+**⚠️ PELIGRO:** Borra tu identidad y ACL completamente. **Irreversible.**
+
+```
+xion@nodo:~$ clear
+⚠️  Este comando borra tu identidad y ACL.
+   Usá 'clear --force' para confirmar.
+```
+
+**Para forzar el borrado sin confirmación:**
+
+```
+xion@nodo:~$ clear --force
+✅ Identidad y ACL eliminadas permanentemente
+```
+
+**Uso recomendado:** Siempre usar `clear` sin `--force` para evitar borrados accidentales. El `--force` solo para scripts o cuando estés 100% seguro.
+
+
 
 *Referencia completa de comandos de XionIA - La Xión Digital 🦾*
