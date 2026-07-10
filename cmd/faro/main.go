@@ -76,8 +76,15 @@ func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPA
                         if exists {
                                 fmt.Printf("[FARO-UDP] 📤 RELAY: reenviando a %s (%s)\n", targetDID, maskAddr(target))
                                 conn.WriteToUDP([]byte(payload), target)
+                                
+                                // ✅ ACK al remitente
+                                ackMsg := fmt.Sprintf("ACK %s %s", senderDID, targetDID)
+                                conn.WriteToUDP([]byte(ackMsg), remoteAddr)
+                                fmt.Printf("[FARO-UDP] ✅ ACK enviado a %s\n", senderDID)
                         } else {
                                 fmt.Printf("[FARO-UDP] ❌ RELAY: target %s NO ENCONTRADO\n", targetDID)
+                                errorMsg := fmt.Sprintf("ERROR %s: target not found", targetDID)
+                                conn.WriteToUDP([]byte(errorMsg), remoteAddr)
                         }
                 }
 
@@ -168,8 +175,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
                                 if exists {
                                         fmt.Printf("[FARO-WS] 📤 RELAY: reenviando a %s\n", targetDID)
                                         target.WriteMessage(websocket.TextMessage, []byte(payload))
+                                        // ✅ ACK al remitente
+                                        ackMsg := fmt.Sprintf("ACK %s %s", senderDID, targetDID)
+                                        conn.WriteMessage(websocket.TextMessage, []byte(ackMsg))
                                 } else {
                                         fmt.Printf("[FARO-WS] ❌ RELAY: target %s NO ENCONTRADO\n", targetDID)
+                                        errorMsg := fmt.Sprintf("ERROR %s: target not found", targetDID)
+                                        conn.WriteMessage(websocket.TextMessage, []byte(errorMsg))
                                 }
                         }
 

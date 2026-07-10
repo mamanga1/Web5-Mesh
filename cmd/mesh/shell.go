@@ -123,10 +123,11 @@ var (
         globalID       *crypto.Identity
         globalFaroAddr string
         globalQuit     chan struct{}
+        msgChan        = make(chan string, 100) // Canal para mensajes entrantes
 )
 
 // ============================================================================
-// CONEXIÓN AL FARO (WebSocket + fallback UDP)
+// CONEXIÓN AL FARO - DETECCIÓN AUTOMÁTICA POR PUERTO
 // ============================================================================
 
 func connectToFaroShell() error {
@@ -134,37 +135,35 @@ func connectToFaroShell() error {
                 return fmt.Errorf("faro no configurado")
         }
 
-        // Intentar WebSocket primero
-        wsURL := fmt.Sprintf("wss://%s/ws", globalFaroAddr)
-        
-        dialer := websocket.Dialer{
-                TLSClientConfig: &tls.Config{
-                        InsecureSkipVerify: true,
-                },
-                HandshakeTimeout: 5 * time.Second,
-        }
-        
-        wsConn, _, err := dialer.Dial(wsURL, nil)
-        if err == nil {
-                fmt.Printf("✅ Conectado al faro por WebSocket: %s\n", globalFaroAddr)
+        // ✅ DETECTAR POR PUERTO: 443 = WebSocket, otro = UDP
+        if strings.Contains(globalFaroAddr, ":443") || strings.Contains(globalFaroAddr, ":8443") {
+                // WebSocket
+                wsURL := fmt.Sprintf("wss://%s/ws", globalFaroAddr)
+                dialer := websocket.Dialer{
+                        TLSClientConfig: &tls.Config{
+                                InsecureSkipVerify: true,
+                        },
+                        HandshakeTimeout: 5 * time.Second,
+                }
+                wsConn, _, err := dialer.Dial(wsURL, nil)
+                if err != nil {
+                        return fmt.Errorf("error conectando WebSocket: %v", err)
+                }
                 globalConnWS = wsConn
                 globalUseWS = true
+                fmt.Printf("✅ Conectado al faro por WebSocket: %s\n", globalFaroAddr)
                 return nil
         }
-        
-        // Fallback a UDP
-        fmt.Printf("⚠️ WebSocket falló (%v), usando UDP\n", err)
-        
+
+        // UDP
         addr, err := net.ResolveUDPAddr("udp", globalFaroAddr)
         if err != nil {
-                return fmt.Errorf("error resolviendo faro: %v", err)
+                return fmt.Errorf("error resolviendo faro UDP: %v", err)
         }
-        
         conn, err := net.DialUDP("udp", nil, addr)
         if err != nil {
-                return fmt.Errorf("error conectando al faro: %v", err)
+                return fmt.Errorf("error conectando UDP: %v", err)
         }
-        
         globalConn = conn
         globalUseWS = false
         fmt.Printf("✅ Conectado al faro por UDP: %s\n", globalFaroAddr)
@@ -187,7 +186,7 @@ func readFromFaroShell() (string, error) {
                 }
                 return string(message), nil
         }
-        
+
         buf := make([]byte, 65536)
         globalConn.SetReadDeadline(time.Now().Add(15 * time.Second))
         n, _, err := globalConn.ReadFromUDP(buf)
@@ -198,7 +197,7 @@ func readFromFaroShell() (string, error) {
 }
 
 // ============================================================================
-// LISTENER UDP
+// LISTENER UDP - Envía mensajes al canal
 // ============================================================================
 
 func startNetworkListener() {
@@ -223,6 +222,11 @@ func startNetworkListener() {
 
                         raw = stripPadding(raw)
                         raw = extractPayload(raw)
+
+                        // ✅ Si es ACK, no mostrar, solo procesar
+                        if strings.HasPrefix(raw, "ACK") {
+                                continue
+                        }
 
                         parts := strings.SplitN(raw, "|", 2)
                         if len(parts) != 2 {
@@ -282,7 +286,7 @@ func startNetworkListener() {
                                         var group crypto.Group
                                         if json.Unmarshal([]byte(parts[2]), &group) == nil {
                                                 crypto.SaveGroupDirect(alias, &group)
-                                                fmt.Printf("\n🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)\n", alias, len(group.Members))
+                                                msgChan <- fmt.Sprintf("🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)", alias, len(group.Members))
                                         }
                                 }
                                 continue
@@ -293,7 +297,7 @@ func startNetworkListener() {
                                 if len(parts) == 2 {
                                         alias := parts[1]
                                         crypto.DeleteGroup(alias)
-                                        fmt.Printf("\n🗑️ [SISTEMA] Grupo '%s' eliminado por el admin\n", alias)
+                                        msgChan <- fmt.Sprintf("🗑️ [SISTEMA] Grupo '%s' eliminado por el admin", alias)
                                 }
                                 continue
                         }
@@ -303,7 +307,7 @@ func startNetworkListener() {
                                 if len(parts) == 2 {
                                         alias := parts[1]
                                         crypto.RemoveMember(alias, globalID.DID)
-                                        fmt.Printf("\n👢 [SISTEMA] Fuiste expulsado del grupo '%s'\n", alias)
+                                        msgChan <- fmt.Sprintf("👢 [SISTEMA] Fuiste expulsado del grupo '%s'", alias)
                                 }
                                 continue
                         }
@@ -314,7 +318,7 @@ func startNetworkListener() {
                                         alias := parts[1]
                                         did := parts[2]
                                         crypto.RemoveMember(alias, did)
-                                        fmt.Printf("\n👋 [SISTEMA] %s salió del grupo '%s'\n", displayName, alias)
+                                        msgChan <- fmt.Sprintf("👋 [SISTEMA] %s salió del grupo '%s'", displayName, alias)
                                 }
                                 continue
                         }
@@ -326,12 +330,13 @@ func startNetworkListener() {
                         if strings.HasPrefix(inner.Cmd, "GROUP:") {
                                 parts := strings.SplitN(inner.Cmd, ":", 3)
                                 if len(parts) == 3 {
-                                        fmt.Printf("\n💬 [GRUPO:%s] [%s]: %s\n", parts[1], displayName, parts[2])
+                                        msgChan <- fmt.Sprintf("💬 [GRUPO:%s] [%s]: %s", parts[1], displayName, parts[2])
                                         continue
                                 }
                         }
 
-                        fmt.Printf("\n💬 [%s]: %s\n", displayName, inner.Cmd)
+                        // ✅ Enviar mensaje al canal en lugar de imprimir directamente
+                        msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, inner.Cmd)
                 }
         }
 }
@@ -412,6 +417,15 @@ func runInteractiveShell() {
         go startNetworkListener()
         go startAnnounceLoop()
 
+        // ✅ Goroutine para imprimir mensajes del canal
+        go func() {
+                for msg := range msgChan {
+                        fmt.Print("\r\033[K") // Limpiar línea actual
+                        fmt.Println(msg)
+                        fmt.Print("xion@nodo:~$ ")
+                }
+        }()
+
         for {
                 input := prompt.Input("xion@nodo:~$ ", completer,
                         prompt.OptionPrefixTextColor(prompt.Yellow),
@@ -430,6 +444,7 @@ func runInteractiveShell() {
                 if input == "exit" || input == "/exit" {
                         fmt.Println("\n👋 Saliendo de la consola asegurada...")
                         close(globalQuit)
+                        close(msgChan)
                         if globalUseWS && globalConnWS != nil {
                                 globalConnWS.Close()
                         }

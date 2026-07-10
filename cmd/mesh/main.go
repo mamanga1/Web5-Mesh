@@ -60,6 +60,11 @@ func extractPayload(raw string) string {
                 if len(fields) >= 3 {
                         return fields[2]
                 }
+        } else if strings.HasPrefix(raw, "ACK ") {
+                fields := strings.Fields(raw)
+                if len(fields) >= 3 {
+                        return fields[2]
+                }
         }
         return raw
 }
@@ -127,40 +132,42 @@ func handleCommand(cmd string) string {
         return "✅ ACK"
 }
 
+// ============================================================
+// CONEXIÓN AL FARO - DETECCIÓN AUTOMÁTICA POR PUERTO
+// ============================================================
+
 func connectToFaro() error {
         faroAddr := getFaroAddr()
         
-        // Intentar WebSocket primero
-        wsURL := fmt.Sprintf("wss://%s/ws", faroAddr)
-        
-        dialer := websocket.Dialer{
-                TLSClientConfig: &tls.Config{
-                        InsecureSkipVerify: true,
-                },
-                HandshakeTimeout: 5 * time.Second,
-        }
-        
-        wsConn, _, err := dialer.Dial(wsURL, nil)
-        if err == nil {
-                fmt.Printf("✅ Conectado al faro por WebSocket: %s\n", faroAddr)
+        // ✅ DETECTAR POR PUERTO: 443 = WebSocket, otro = UDP
+        if strings.Contains(faroAddr, ":443") || strings.Contains(faroAddr, ":8443") {
+                // WebSocket
+                wsURL := fmt.Sprintf("wss://%s/ws", faroAddr)
+                dialer := websocket.Dialer{
+                        TLSClientConfig: &tls.Config{
+                                InsecureSkipVerify: true,
+                        },
+                        HandshakeTimeout: 5 * time.Second,
+                }
+                wsConn, _, err := dialer.Dial(wsURL, nil)
+                if err != nil {
+                        return fmt.Errorf("error conectando WebSocket: %v", err)
+                }
                 connWS = wsConn
                 useWebSocket = true
+                fmt.Printf("✅ Conectado al faro por WebSocket: %s\n", faroAddr)
                 return nil
         }
-        
-        // Fallback a UDP
-        fmt.Printf("⚠️ WebSocket falló (%v), usando UDP\n", err)
-        
+
+        // UDP (directo, sin fallback innecesario)
         addr, err := net.ResolveUDPAddr("udp", faroAddr)
         if err != nil {
-                return fmt.Errorf("error resolviendo faro: %v", err)
+                return fmt.Errorf("error resolviendo faro UDP: %v", err)
         }
-        
         conn, err := net.DialUDP("udp", nil, addr)
         if err != nil {
-                return fmt.Errorf("error conectando al faro: %v", err)
+                return fmt.Errorf("error conectando UDP: %v", err)
         }
-        
         connUDP = conn
         useWebSocket = false
         fmt.Printf("✅ Conectado al faro por UDP: %s\n", faroAddr)
@@ -194,8 +201,9 @@ func readFromFaro() (string, error) {
 }
 
 // ============================================================
-// ExecuteRealCommand - VERSIÓN CON WEBSOCKET + FALLBACK UDP
+// ExecuteRealCommand - VERSIÓN CON ACK ASÍNCRONO
 // ============================================================
+
 func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string {
         acl, err := crypto.LoadACL()
         if err != nil {
@@ -238,23 +246,21 @@ func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string
                 return fmt.Sprintf("❌ Error enviando: %v", err)
         }
 
-        respRaw, err := readFromFaro()
-        if err != nil {
-                return "⏳ Timeout: El nodo destino no respondió a tiempo"
-        }
-
-        respRaw = stripPadding(respRaw)
-        respRaw = extractPayload(respRaw)
-        parts := strings.SplitN(respRaw, "|", 2)
-        if len(parts) == 2 {
-                ciphertext, _ := base64.StdEncoding.DecodeString(parts[1])
-                plaintext, _ := crypto.DecryptPayload(sharedKey, ciphertext)
-                var innerResp InnerPayload
-                if json.Unmarshal(plaintext, &innerResp) == nil {
-                        return fmt.Sprintf("📩 %s", innerResp.Cmd)
+        // ✅ Esperar ACK con timeout corto (2 segundos)
+        ackChan := make(chan bool, 1)
+        go func() {
+                respRaw, err := readFromFaro()
+                if err == nil && strings.HasPrefix(respRaw, "ACK") {
+                        ackChan <- true
                 }
+        }()
+        
+        select {
+        case <-ackChan:
+                return "✅ Mensaje entregado"
+        case <-time.After(2 * time.Second):
+                return "📤 Mensaje enviado (sin confirmación)"
         }
-        return fmt.Sprintf("📩 Respuesta cruda: %s", respRaw)
 }
 
 func init() {
