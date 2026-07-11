@@ -47,9 +47,9 @@ XionIA **NO es un entorno de ejecución**. Es una FSM distribuida donde:
 |:---------|:---------------------------|:-----------|
 | **Tipo** | Turing-completo (propósito general) | FSM distribuido (propósito específico) |
 | **Hardware que gestiona** | CPU, RAM, disco, red física | Red overlay, identidad criptográfica, túneles cifrados |
-| **Filesystem** | ext4, NTFS, APFS | Jaula de Faraday (`~/.u2p/workspace/`) |
+| **Filesystem** | ext4, NTFS, APFS | Jaula de Faraday (`~/.xion/workspace/`) |
 | **Procesos** | PIDs, scheduling | Sesiones (chat, SSH, hosting) |
-| **Red** | TCP/IP stack | Túneles U2P sobre UDP |
+| **Red** | TCP/IP stack | Túneles U2P sobre UDP/WebSocket |
 | **Identidad** | UID/GID | DID (`did:maia:xxxxx`) |
 | **Seguridad** | Permisos, SELinux | ACL, firmas Ed25519, cifrado E2E |
 | **Drivers** | Drivers de hardware | Faros (controladores de red virtual) |
@@ -70,7 +70,7 @@ Al no ser Turing-completo, XionIA **no es "difícil de hackear"**. Es **no hacke
 
 ```
 ESTADOS VÁLIDOS:
-├── Recibir paquete UDP
+├── Recibir paquete UDP/WebSocket
 ├── Verificar firma Ed25519
 ├── Derivar clave X25519
 ├── Cifrar/descifrar ChaCha20-Poly1305
@@ -113,7 +113,7 @@ En los sistemas distribuidos modernos, **la red es el hardware virtual**. XionIA
 │  └── DIDs (IDs de Hardware Virtual)         │
 ├─────────────────────────────────────────────┤
 │  HOST OS (Linux/Windows/Android)            │
-│  └── Solo provee: sockets UDP, filesystem   │
+│  └── Solo provee: sockets UDP, TCP, filesystem │
 └─────────────────────────────────────────────┘
 ```
 
@@ -167,4 +167,3 @@ El objetivo no es encontrar "vulnerabilidades tipo CVE" (que no existen por dise
 *"XionIA: Un User-Space Kernel que gestiona hardware virtual distribuido mediante un Protocolo de Estado Finito. No hackeable en los términos clásicos, porque los términos clásicos no aplican."*
 
 *Documento técnico de XionIA - La Xión Digital 🦾*
-```
