@@ -8,7 +8,8 @@ Un Faro es un nodo relay ciego que permite la comunicación entre nodos XionIA c
 - **No guarda logs persistentes**: Opera en RAM volátil
 - **No sabe quién sos**: Solo ve DIDs y blobs cifrados
 - **Trunca IPs en logs**: Por privacidad, no muestra IPs completas
-- **Es esencial**: Sin Faro, los nodos detrás de NAT no pueden comunicarse
+- **Soporte dual**: UDP (54321) + WebSocket (443)
+- **ACK**: Confirma entrega de mensajes
 
 ---
 
@@ -17,10 +18,10 @@ Un Faro es un nodo relay ciego que permite la comunicación entre nodos XionIA c
 ### Compilar
 
 ```bash
-go build -o faro cmd/faro/main.go
+go build -trimpath -ldflags="-s -w" -o faro ./cmd/faro
 ```
 
-### Ejecutar
+### Ejecutar (UDP + WebSocket simultáneo)
 
 ```bash
 ./faro
@@ -28,96 +29,76 @@ go build -o faro cmd/faro/main.go
 
 **Output:**
 ```
-🛡️ [FARO] Relay Ciego en 0.0.0.0:54321 (Logs con IPs truncadas)
+🚀 Iniciando Faro Dual (UDP + WebSocket)
+🛡️ [FARO-UDP] Relay Ciego en 0.0.0.0:54321
+🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:443
 ```
 
-El Faro arranca en el puerto **54321 UDP** (hardcodeado). No hay flags de configuración.
+El Faro arranca en **dos puertos simultáneamente:**
+- **54321 UDP** (rápido, para redes locales)
+- **443 TCP** (WebSocket con TLS, para firewalls)
+
+### Variables de entorno (para el cliente)
+
+```bash
+# El faro escucha en 0.0.0.0:54321 y 0.0.0.0:443
+# Los clientes usan FARO_ADDR para conectarse
+export FARO_ADDR="190.220.45.26:54321"  # UDP
+# o
+export FARO_ADDR="190.220.45.26:443"    # WebSocket
+```
+
+### Certificados TLS (para WebSocket)
+
+El Faro espera `cert.pem` y `key.pem` en el directorio de ejecución.
+
+**Generar certificados autofirmados:**
+
+```bash
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=faro.local"
+```
+
+**Output esperado:**
+```
+🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:443
+```
+
+**Nota:** Si no hay certificados, el WebSocket no arrancará.
 
 ### Ejecutar en background
 
 ```bash
-./faro > faro.log 2>&1 &
+nohup ./faro > faro.log 2>&1 &
 tail -f faro.log
 ```
 
 ---
 
-## 🔧 Configuración del Router (OBLIGATORIO)
+## 🔧 Configuración del Router
 
-### ¿Por qué necesito abrir el puerto?
+### UDP (54321)
 
-El Faro escucha en el puerto UDP 54321. Para que nodos externos (desde internet) puedan conectarse, tu router debe redirigir el tráfico entrante en ese puerto hacia tu máquina.
+**Por qué necesitas abrir el puerto:**  
+El Faro escucha en UDP 54321. Para que nodos externos puedan conectarse, tu router debe redirigir el tráfico entrante.
 
-**Sin port forwarding:**
-- ❌ Nodos en tu LAN pueden conectarse (IPs privadas)
-- ❌ Nodos externos NO pueden conectarse (router bloquea)
-
-**Con port forwarding:**
-- ✅ Nodos en tu LAN pueden conectarse
-- ✅ Nodos externos pueden conectarse
-
-### Paso 1: Identificar tu IP Interna
-
-```bash
-# Linux/macOS
-ip addr show | grep "inet " | grep -v 127.0.0.1
-
-# Windows
-ipconfig | findstr /i "IPv4"
-```
-
-**Ejemplo:** `192.168.1.238`
-
-### Paso 2: Acceder al Router
-
-1. Abrí un navegador
-2. Entrá a la IP del router (comúnmente `192.168.1.1` o `192.168.0.1`)
-3. Logueate con usuario/admin (viene en la etiqueta del router)
-
-### Paso 3: Configurar Port Forwarding
-
-Buscá la sección **"Port Forwarding"**, **"Virtual Server"**, o **"NAT"** en tu router.
-
-**Configuración:**
+**Configuración de Port Forwarding:**
 
 | Campo | Valor |
 |-------|-------|
-| **Nombre** | XionIA-Faro |
+| **Nombre** | XionIA-Faro-UDP |
 | **Protocolo** | UDP |
 | **Puerto Externo** | 54321 |
-| **IP Interna** | 192.168.1.238 (tu IP) |
+| **IP Interna** | 192.168.1.x (tu IP) |
 | **Puerto Interno** | 54321 |
 
-### Paso 4: Verificar que Funciona
+### WebSocket (443)
 
-**Desde otra red (usá tu celular con datos móviles):**
+**El puerto 443 usa TCP**, el mismo que HTTPS. Si ya tenés un servidor web, puede haber conflicto.
 
+**Verificar disponibilidad de 443:**
 ```bash
-# Compilar un nodo
-go build -o mesh ./cmd/mesh
-
-# Conectar al Faro (etapa 1 faro de mamanga podes conectarte con vpn previo)
-./mesh shell
+sudo netstat -tulpn | grep :443
 ```
-
-**En el Faro, deberías ver:**
-```
-[FARO] 📥 ANNOUNCE: did:maia:xxxxx desde 190.220.*.*
-```
-
-Si no ves el ANNOUNCE, el puerto no está abierto correctamente.
-
----
-
-## 🌐 Obtener tu IP Pública
-
-```bash
-curl ifconfig.me
-```
-
-**Ejemplo:** `190.220.45.26`
-
-**Nota:** Si tu ISP te da IP dinámica (cambia cada tanto), vas a tener que actualizar el port forwarding si cambia. Solución: usar un servicio de DNS dinámico (DuckDNS, No-IP).
 
 ---
 
@@ -127,23 +108,58 @@ curl ifconfig.me
 
 ```bash
 sudo ufw allow 54321/udp
+sudo ufw allow 443/tcp   # para WebSocket
+sudo ufw enable
 ```
 
-### Linux (iptables)
+### Oracle Cloud (Security List)
 
-```bash
-sudo iptables -A INPUT -p udp --dport 54321 -j ACCEPT
-```
-
-### Windows (PowerShell como administrador)
-
-```powershell
-New-NetFirewallRule -DisplayName "XionIA Faro" -Direction Inbound -Protocol UDP -LocalPort 54321 -Action Allow
-```
+| Source Type | Source CIDR | Protocol | Port | Description |
+|-------------|-------------|----------|------|-------------|
+| CIDR | 0.0.0.0/0 | UDP | 54321 | XionIA UDP |
+| CIDR | 0.0.0.0/0 | TCP | 443 | XionIA WebSocket |
 
 ---
 
-## 📋 Comandos del Protocolo
+## 🧠 CGNAT vs IP Pública
+
+### El mito del puerto 443
+
+**El puerto 443 NO salta CGNAT.** Si tu ISP te asigna una IP privada (CGNAT), ningún puerto va a recibir conexiones entrantes, ni 443 ni ningún otro.
+
+**¿Para qué sirve el 443 entonces?**
+
+- Los ISP **no bloquean** el tráfico HTTPS (puerto 443).
+- En redes corporativas o públicas, el puerto 54321 (UDP) suele estar bloqueado.
+- El 443 está abierto en casi todos los firewalls.
+- Si tenés **IP pública**, podés usar 443 para que nodos detrás de firewalls estrictos puedan conectarse a tu Faro.
+
+### ¿Cómo se salta CGNAT?
+
+**La única forma real:**
+
+1. **Levantar un Faro con IP pública** (ej: Oracle Free Tier, VPS).
+2. **Todos los nodos (incluso detrás de CGNAT) se conectan SALIENTE a ese Faro**.
+3. **El Faro reenvía los mensajes** entre los nodos.
+
+**Flujo:**
+
+```
+Nodo A (CGNAT) ──(saliente)──> Faro (IP pública) ──(saliente)──> Nodo B (CGNAT)
+```
+
+**El Faro actúa como relay**, no como túnel CGNAT. Los nodos siempre inician la conexión hacia afuera.
+
+### Puertos para conexiones salientes
+
+- **UDP (54321)**: Más rápido, recomendado.
+- **WebSocket (443)**: Más lento (TLS overhead), pero pasa firewalls más restrictivos.
+
+**Ambos requieren IP pública en el Faro.** La diferencia es qué puerto puede atravesar el firewall del nodo cliente.
+
+---
+
+## 📋 Protocolo del Faro
 
 El Faro entiende 4 comandos:
 
@@ -154,7 +170,7 @@ Un nodo se registra en el Faro.
 ANNOUNCE did:maia:xxxxx
 ```
 
-El Faro guarda `DID → dirección UDP` en su registro en RAM.
+El Faro guarda `DID → dirección` en su registro en RAM.
 
 ### RELAY
 Un nodo pide al Faro que retransmita un mensaje a otro nodo.
@@ -163,7 +179,7 @@ Un nodo pide al Faro que retransmita un mensaje a otro nodo.
 RELAY did:destino did:emisor payload_cifrado
 ```
 
-El Faro busca el destino en su registro y reenvía. Si no lo encuentra, falla.
+El Faro busca el destino en su registro y reenvía. Si existe, envía ACK al emisor.
 
 ### RESPONSE
 Un nodo responde a un mensaje recibido vía RELAY.
@@ -172,16 +188,14 @@ Un nodo responde a un mensaje recibido vía RELAY.
 RESPONSE did:destino payload_cifrado
 ```
 
-El Faro usa `lastClient` (registro temporal del último emisor) para reenviar la respuesta.
+El Faro usa `lastClient` para reenviar la respuesta al nodo original.
 
-### WHERE_IS
-Un nodo pregunta si otro DID está registrado en el Faro.
+### ACK
+Confirmación de entrega (enviada automáticamente por el Faro).
 
 ```
-WHERE_IS did:xxxxx
+ACK did:emisor did:destino
 ```
-
-El Faro responde `READY` si existe, `NOT_FOUND` si no.
 
 ---
 
@@ -190,25 +204,40 @@ El Faro responde `READY` si existe, `NOT_FOUND` si no.
 ### Ver que el Faro está escuchando
 
 ```bash
+# UDP
 sudo ss -ulnp | grep 54321
+
+# WebSocket
+sudo ss -tlnp | grep :443
 ```
 
 **Output esperado:**
 ```
 UNCONN 0 0 *:54321 *:* users:(("faro",pid=650,fd=3))
+LISTEN 0 0 *:443 *:* users:(("faro",pid=650,fd=4))
+```
+
+### Ver logs en tiempo real
+
+```bash
+tail -f faro.log
+```
+
+**Logs esperados:**
+```
+🚀 Iniciando Faro Dual (UDP + WebSocket)
+🛡️ [FARO-UDP] Relay Ciego en 0.0.0.0:54321
+🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:443
+[FARO-UDP] 📥 ANNOUNCE: did:maia:xxxxx desde 190.220.*.*
+[FARO-UDP] 📤 RELAY: reenviando a did:maia:yyyyy (104.28.*.*)
+[FARO-UDP] ✅ ACK enviado a did:maia:xxxxx
 ```
 
 ### Ver tráfico en tiempo real
 
 ```bash
 sudo tcpdump -i any udp port 54321
-```
-
-### Ver logs
-
-```bash
-# Si ejecutaste con background
-tail -f faro.log
+sudo tcpdump -i any tcp port 443
 ```
 
 ---
@@ -217,55 +246,56 @@ tail -f faro.log
 
 ### "No puedo conectarme desde afuera"
 
-**Causas posibles:**
-1. ❌ Port forwarding no configurado en router
-2. ❌ Firewall local bloqueando
-3. ❌ IP pública cambió (IP dinámica)
-4. ❌ ISP usa CGNAT (no tenés IP pública real)
+| Problema | Solución |
+|----------|----------|
+| Port forwarding no configurado | Configurar en el router |
+| Firewall local bloqueando | `sudo ufw allow 54321/udp` |
+| IP pública cambió | Usar DNS dinámico |
+| ISP usa CGNAT | Usar WebSocket (443) o VPS |
+
+### "WebSocket no arranca"
+
+**Causa:** No hay certificados TLS.
 
 **Solución:**
 ```bash
-# Verificar que el Faro está escuchando
-sudo ss -ulnp | grep 54321
+openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=faro.local"
 ```
 
-### "Mi ISP no me da IP pública (CGNAT)"
+### "El puerto 443 está ocupado"
 
-**Problema:** Algunos ISPs usan CGNAT, donde múltiples clientes comparten la misma IP pública. En este caso, el port forwarding no funciona.
+**Causa:** Otro servicio (nginx, apache) usa el puerto 443.
 
-**Solución:**
-1. Llamar al ISP y pedir IP pública
-2. Usar un VPS como Faro
-3. Conectarse a otro Faro que sí tenga IP pública
+**Soluciones:**
+1. Detener el otro servicio
+2. Usar solo UDP (54321)
+3. Modificar el puerto en el código (futuro)
 
 ---
 
 ## 🧭 Checklist para Levantar un Faro
 
-- [ ] Compilar el Faro: `go build -o faro cmd/faro/main.go`
+- [ ] Compilar el Faro: `go build -trimpath -ldflags="-s -w" -o faro ./cmd/faro`
+- [ ] Generar certificados TLS: `openssl req ...`
 - [ ] Identificar IP interna: `ip addr show`
-- [ ] Acceder al router: `192.168.1.1`
 - [ ] Configurar port forwarding: UDP 54321 → IP interna
-- [ ] Configurar firewall local: permitir UDP 54321
-- [ ] Ejecutar el Faro: `./faro`
-- [ ] Verificar IP pública: `curl ifconfig.me`
+- [ ] Configurar firewall local: `sudo ufw allow 54321/udp`
+- [ ] Ejecutar el Faro: `nohup ./faro > faro.log 2>&1 &`
+- [ ] Verificar logs: `tail -f faro.log`
 - [ ] Probar desde otra red: conectar nodo desde celular
-- [ ] Confirmar ANNOUNCE en logs del Faro
+- [ ] Confirmar ANNOUNCE y ACK en logs
 
 ---
 
-## 🔮 Limitaciones Actuales (Fase 1)
+## 🔮 Limitaciones Actuales
 
-- ❌ Puerto hardcodeado (54321), no se puede cambiar
-- ❌ Sin título ni banner descriptivo
+- ❌ Puerto UDP hardcodeado (54321)
+- ❌ No se puede deshabilitar WebSocket (443)
+- ❌ Certificados TLS fijos (`cert.pem`, `key.pem`)
 - ❌ Sin detección automática de IP pública
-- ❌ Sin búsqueda de puerto libre
-- ❌ Sin flags de configuración
 
-**Estas limitaciones se resuelven en Fase 2** con Faros Inteligentes.
+**Estas limitaciones se resolverán en futuras versiones.**
 
 ---
 
-*Última actualización: Junio 2026*
-```
-
+*Última actualización: Julio 2026*
