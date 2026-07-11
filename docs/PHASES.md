@@ -15,9 +15,13 @@ XionIA sigue un modelo **Open Core** claro y sostenible: el núcleo y todas las 
 - ✅ Cifrado E2E ChaCha20-Poly1305
 - ✅ Noise Protocol IK con Perfect Forward Secrecy (PFS)
 - ✅ Sesiones con rekeying automático (cada 5 min)
-- ✅ Comandos base: ping, acl, whoami, session
+- ✅ Comandos base: whoami, acl, alias, chat, group
 - ✅ Shell interactivo (XION KERNEL)
 - ✅ Compilación cross-arch (x86_64 + ARM)
+- ✅ Faro dual (UDP 54321 + WebSocket 443)
+- ✅ Jaula de Faraday (`~/.xion/workspace/`)
+- ✅ Comandos Unix en la Jaula (ls, cat, rm, mv, cp, mkdir, touch, edit)
+- ✅ Comandos import/export/sign/verify
 
 **Entregables técnicos:**
 - `src/crypto/identity.go` — Gestión de identidad
@@ -25,6 +29,8 @@ XionIA sigue un modelo **Open Core** claro y sostenible: el núcleo y todas las 
 - `src/crypto/cipher_session.go` — Sesiones PFS
 - `src/crypto/cipher.go` — ChaCha20-Poly1305
 - `src/crypto/acl.go` — ACL persistente
+- `cmd/faro/main.go` — Faro dual UDP/WebSocket
+- `cmd/mesh/commands/` — Todos los comandos
 
 ---
 
@@ -38,6 +44,7 @@ XionIA sigue un modelo **Open Core** claro y sostenible: el núcleo y todas las 
 
 **Comunicación fácil:**
 - ✅ Alias locales para nodos (no pegar DIDs largos)
+- ✅ Historial de comandos en sesión (flechas ↑/↓)
 - 🔲 Chat asíncrono con sesiones (tipo pestañas de navegador)
 - 🔲 Notificaciones de mensajes en background
 - 🔲 Historial de conversaciones persistente
@@ -54,57 +61,59 @@ XionIA sigue un modelo **Open Core** claro y sostenible: el núcleo y todas las 
 - 🔲 Sin dependencia de APIs externas
 
 **Faro mejorado:**
+- ✅ WebSocket (443) para firewalls restrictivos
 - 🔲 Puerto dinámico (rota si hay drop)
 - 🔲 Evade drops de ISP sin configurar router
 - 🔲 Alias y topics configurables
 
 **Shell mejorado:**
+- ✅ Historial en sesión (flechas ↑/↓)
 - 🔲 Modo "sesión activa" (cuando hacés attach, escribís directo)
 - 🔲 Help contextual mejorado
 - 🔲 Experiencia tipo terminal Linux
-- 🔲 Jaula de Faraday real (cifrado E2E en todo)
+- ✅ Jaula de Faraday real (cifrado E2E en todo)
 
 ---
 
 ### Milestones:
 
-**M2.1 — Alias locales y chat asíncrono (2 semanas)**
-- Sistema de alias locales en `~/.xion/aliases.json`
-- `/chat amigo "hola"` en vez de pegar DID
-- Chat abre sesión automáticamente (tipo pestaña)
-- Notificaciones en background cuando llega respuesta
-- `/session attach 1` para volver al chat sin reescribir comando
-- Historial de conversaciones persistente
+**M2.1 — Alias locales y chat asíncrono (COMPLETADO)**
+- ✅ Sistema de alias locales en `~/.xion/aliases.json`
+- ✅ `/chat amigo "hola"` en vez de pegar DID
+- 🔲 Chat abre sesión automáticamente (tipo pestaña)
+- 🔲 Notificaciones en background cuando llega respuesta
+- 🔲 `/session attach 1` para volver al chat sin reescribir comando
+- 🔲 Historial de conversaciones persistente
 
-**M2.2 — Faro con puerto dinámico (2 semanas)**
-- Alias y topics configurables (`--alias`, `--topic`)
-- Puerto dinámico (rota si hay drop: 42069 → 42070 → 42071...)
-- Evade drops de ISP sin configurar router
-- Logs con IPs truncadas (privacidad)
+**M2.2 — Faro mejorado (EN CURSO)**
+- ✅ WebSocket (443) para firewalls restrictivos
+- 🔲 Puerto dinámico (rota si hay drop: 42069 → 42070 → 42071...)
+- 🔲 Evade drops de ISP sin configurar router
+- 🔲 Logs con IPs truncadas (privacidad)
 
 **M2.3 — Procesador de texto + PDF (2 semanas)**
-- Editor mejorado en el shell
-- Exportar a .pdf con metadatos limpios
-- Compartir documentos dentro del Faro/red
-- Metadatos sin tracking (sin autor, sin software, sin fechas)
+- 🔲 Editor mejorado en el shell
+- 🔲 Exportar a .pdf con metadatos limpios
+- 🔲 Compartir documentos dentro del Faro/red
+- 🔲 Metadatos sin tracking (sin autor, sin software, sin fechas)
 
 **M2.4 — Impresora de red (1 semana)**
-- `/printer list` — ver impresoras disponibles
-- `/printer set hp` — configurar impresora por defecto
-- `/print nota.pdf` — imprimir desde la Jaula
-- CUPS integration para Linux
+- 🔲 `/printer list` — ver impresoras disponibles
+- 🔲 `/printer set hp` — configurar impresora por defecto
+- 🔲 `/print nota.pdf` — imprimir desde la Jaula
+- 🔲 CUPS integration para Linux
 
 **M2.5 — MaIA Local-First (3 semanas)**
-- Integrar modelo de IA en el Faro
-- Endpoint para consultas desde nodos
-- Inferencia compartida en la red del Faro
-- Sin dependencia de APIs externas
+- 🔲 Integrar modelo de IA en el Faro
+- 🔲 Endpoint para consultas desde nodos
+- 🔲 Inferencia compartida en la red del Faro
+- 🔲 Sin dependencia de APIs externas
 
 **M2.6 — Shell mejorado (2 semanas)**
-- Modo "sesión activa" (prompt cambia cuando hacés attach)
-- Help contextual mejorado
-- Autocompletado básico
-- Experiencia pulida tipo terminal Linux
+- 🔲 Modo "sesión activa" (prompt cambia cuando hacés attach)
+- 🔲 Help contextual mejorado
+- 🔲 Autocompletado básico
+- 🔲 Experiencia pulida tipo terminal Linux
 
 ---
 
@@ -173,7 +182,7 @@ XionIA sigue un modelo **Open Core** claro y sostenible: el núcleo y todas las 
 | Fase | Estado | Progreso |
 |------|--------|----------|
 | 1 — Fundación Criptográfica | ✅ Completada | 100% |
-| 2 — Herramienta Soberana | 🚧 En curso | ~15% |
+| 2 — Herramienta Soberana | 🚧 En curso | ~30% |
 | 3 — XION Faraday Suite Enterprise | 🔵 Planificada | 0% |
 
 ---
@@ -220,5 +229,4 @@ Una vez finalizada la Fase 2, el proyecto se sostendrá mediante licencias comer
 
 > *"Construimos la base en público para que el mundo confíe. Construimos el futuro en privado para que el proyecto sobreviva."*
 >
-> **Última actualización:** 29 de junio de 2026
-
+> **Última actualización:** 10 de Julio de 2026
