@@ -10,7 +10,7 @@
 
 ## XionIA Faraday - Red de Túneles Soberanos con Jaula de Faraday Lógica
 
-**Protocolo de red overlay soberana que elimina intermediarios. Comunicación E2E sobre UDP con cifrado Ed25519/X25519/ChaCha20-Poly1305, relay ciego (zero logs), y aislamiento criptográfico. Corre en servidores Xeon, TV boxes y Raspberry Pi.**
+**Protocolo de red overlay soberana que elimina intermediarios. Comunicación E2E sobre UDP/WebSocket con cifrado Ed25519/X25519/ChaCha20-Poly1305, relay ciego (zero logs), y aislamiento criptográfico. Corre en servidores Xeon, TV boxes y Raspberry Pi.**
 
 <div align="center">
   <img src="https://i.postimg.cc/V6bPWYdC/faro.jpg" alt="El Faro" width="380"/>
@@ -36,7 +36,7 @@ cd Web5-Mesh
 **Ejecutar:**
 
 ```bash
-# Terminal 1 - Levantar Faro
+# Terminal 1 - Levantar Faro (UDP + WebSocket)
 ./faro
 
 # Terminal 2 - Conectar nodo
@@ -58,11 +58,9 @@ Listo. Ya estás dentro de la Jaula.
 - [PHASES](docs/PHASES.md) - Fases de despliegue
 - [TECHNICAL](docs/TECHNICAL.md) - Arquitectura y detalles técnicos
 - [COMMANDS](docs/COMMANDS.md) - Referencia de comandos
-- [MULTITAREA](docs/SESSIONS.md) - Guía de Sesiones (Multitarea)
 - [FAROS](docs/FAROS.md) - Configuración de Faros
 - [WHITEPAPER](docs/WHITEPAPER.md) - Análisis completo
 - [KERNEL](docs/KERNEL.md) - XionIA: Un User-Space Kernel
-- [FARADAY](docs/FARADAY.md) - Jaula de Faraday (Bóveda Soberana)
 
 ---
 
