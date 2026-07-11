@@ -27,9 +27,10 @@ A diferencia de las redes P2P que propagan datos saltando de nodo en nodo (lo qu
 
 ### B. El Relay Ciego (Blind Relay)
 El nodo "Faro" actúa como un intermediario agnóstico. 
-- **No lee contenido:** Solo retransmite paquetes UDP cifrados con padding aleatorio (anti-DPI).
+- **No lee contenido:** Solo retransmite paquetes UDP/WebSocket cifrados con padding aleatorio (anti-DPI).
 - **No guarda registros:** Operación en memoria RAM volátil.
 - **Zero-Knowledge:** El Relay no sabe quién se comunica con quién, solo sabe que existe tráfico.
+- **ACK (Confirmación):** Garantiza la entrega del mensaje al emisor.
 
 ### C. Soberanía en el Edge (Hardware Reciclado)
 El stack criptográfico de XionIA está optimizado para arquitecturas **ARM64**. Esto permite transformar dispositivos descartados (TV Boxes Android) en nodos de infraestructura crítica, creando una red distribuida física real, no virtual.
@@ -64,27 +65,7 @@ XionIA no es solo una herramienta técnica, es una infraestructura de derechos h
 
 ---
 
-## 5. Roadmap y Solicitud de Financiamiento
-
-El proyecto XionIA se encuentra en una etapa de **PoC (Proof of Concept) Funcional**. La arquitectura base (Túneles UDP, Relay Ciego, Cifrado E2E, Shell Interactiva) está operativa.
-
-Para la próxima fase (v1.0 Stable), buscamos soporte para los siguientes hitos:
-
-###  Milestones (Q3 - Q4 2026)
-
-1.  **Implementación Noise IK:** Migración a un handshake estandarizado con Perfect Forward Secrecy para auditoría de seguridad formal.
-2.  **Federación de Faros:** Desarrollo del protocolo de sincronización entre múltiples Faros para eliminar cualquier punto único de fallo y escalar a nivel global.
-3.  **Auditoría de Seguridad:** Revisión externa del stack criptográfico (ChaCha20-Poly1305, X25519, Ed25519).
-4.  **Integración IA Local:** Módulo de inferencia segura que permita a los nodos procesar datos sin salir de la "Jaula de Faraday" (Local-First AI).
-
-### 📊 Métricas de Adopción Esperadas
-- **Despliegue:** Capacidad de correr en dispositivos Android/ARM64 con <500MB de RAM.
-- **Rendimiento:** Mantener latencia <100ms en conexiones directas y <300ms en ruteo.
-- **Privacidad:** Cero almacenamiento de metadatos en infraestructura de terceros.
-
----
-
-## 6. Conclusión
+## 5. Conclusión
 
 XionIA representa un cambio de paradigma: pasar de confiar en servidores centralizados a confiar en matemáticas y hardware distribuido. Es una infraestructura diseñada para sobrevivir, resistir y proteger la comunicación humana en la era de la vigilancia masiva.
 
@@ -93,3 +74,4 @@ XionIA representa un cambio de paradigma: pasar de confiar en servidores central
 ---
 *Documento preparado por el equipo de desarrollo de XionIA.*
 *Repositorio: github.com/mamanga1/Web5-Mesh*
+*Última actualización: 10 de Julio de 2026*
