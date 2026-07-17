@@ -1,98 +1,144 @@
 package crypto
 
 import (
-	"encoding/hex"
-	"encoding/json"
-	"os"
+    "encoding/hex"
+    "encoding/json"
+    "fmt"
+    "os"
 )
 
-// ACLFile se usa en el directorio actual (no en ~/.xion/)
-const ACLFile = "acl.json"
-
-type PeerInfo struct {
-	PubKeyEd string `json:"pubkey_ed"`
-	PubKeyX  string `json:"pubkey_x"`
-}
+var ACLFile = "acl.json"
 
 type ACL struct {
-	Peers map[string]PeerInfo `json:"peers"`
+    Peers map[string]PeerInfo `json:"peers"`
+}
+
+type PeerInfo struct {
+    DID      string `json:"did"`
+    PubKeyEd string `json:"pubkey_ed"`
+    PubKeyX  string `json:"pubkey_x"`
+    AddedAt  int64  `json:"added_at"`
+    AddedBy  string `json:"added_by,omitempty"`
 }
 
 func LoadACL() (*ACL, error) {
-	acl := &ACL{Peers: make(map[string]PeerInfo)}
-	data, err := os.ReadFile(ACLFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return acl, nil
-		}
-		return nil, err
-	}
-	if err := json.Unmarshal(data, acl); err != nil {
-		return nil, err
-	}
-	return acl, nil
-}
+    data, err := os.ReadFile(ACLFile)
+    if err != nil {
+        if os.IsNotExist(err) {
+            return &ACL{Peers: make(map[string]PeerInfo)}, nil
+        }
+        return nil, err
+    }
 
-func (a *ACL) IsAllowed(did string) bool {
-	_, exists := a.Peers[did]
-	return exists
-}
+    // ✅ Forzar permisos 0600 AL LEER (archivos existentes)
+    os.Chmod(ACLFile, 0600)
 
-func (a *ACL) GetPeerKeys(did string) (pubEd []byte, pubX []byte, err error) {
-	peer, exists := a.Peers[did]
-	if !exists {
-		return nil, nil, os.ErrNotExist
-	}
+    var acl ACL
+    if err := json.Unmarshal(data, &acl); err != nil {
+        return nil, err
+    }
 
-	pubEd, err = hex.DecodeString(peer.PubKeyEd)
-	if err != nil {
-		return nil, nil, err
-	}
+    if acl.Peers == nil {
+        acl.Peers = make(map[string]PeerInfo)
+    }
 
-	pubX, err = hex.DecodeString(peer.PubKeyX)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return pubEd, pubX, nil
+    return &acl, nil
 }
 
 func (a *ACL) Save() error {
-	data, err := json.MarshalIndent(a, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(ACLFile, data, 0644)
+    data, err := json.MarshalIndent(a, "", "  ")
+    if err != nil {
+        return err
+    }
+    if err := os.WriteFile(ACLFile, data, 0600); err != nil {
+        return err
+    }
+    // ✅ Asegurar permisos DESPUÉS de escribir
+    return os.Chmod(ACLFile, 0600)
 }
 
-// AddPeer agrega un peer a la ACL
+func (a *ACL) Add(peer PeerInfo) {
+    a.Peers[peer.DID] = peer
+}
+
+func (a *ACL) Remove(did string) {
+    delete(a.Peers, did)
+}
+
+func (a *ACL) Get(did string) (PeerInfo, bool) {
+    peer, ok := a.Peers[did]
+    return peer, ok
+}
+
+func (a *ACL) List() []PeerInfo {
+    list := make([]PeerInfo, 0, len(a.Peers))
+    for _, peer := range a.Peers {
+        list = append(list, peer)
+    }
+    return list
+}
+
+func (a *ACL) Clear() {
+    a.Peers = make(map[string]PeerInfo)
+}
+
+// ============================================================================
+// FUNCIONES DE COMPATIBILIDAD
+// ============================================================================
+
+func (a *ACL) IsAllowed(did string) bool {
+    _, ok := a.Peers[did]
+    return ok
+}
+
+func (a *ACL) GetPeerKeys(did string) ([]byte, []byte, error) {
+    peer, ok := a.Peers[did]
+    if !ok {
+        return nil, nil, os.ErrNotExist
+    }
+
+    pubEd, err := hex.DecodeString(peer.PubKeyEd)
+    if err != nil {
+        return nil, nil, err
+    }
+
+    pubX, err := hex.DecodeString(peer.PubKeyX)
+    if err != nil {
+        return nil, nil, err
+    }
+
+    return pubEd, pubX, nil
+}
+
 func AddPeer(did, pubKeyEd, pubKeyX string) error {
-	acl, err := LoadACL()
-	if err != nil {
-		return err
-	}
-	acl.Peers[did] = PeerInfo{
-		PubKeyEd: pubKeyEd,
-		PubKeyX:  pubKeyX,
-	}
-	return acl.Save()
+    acl, err := LoadACL()
+    if err != nil {
+        return err
+    }
+    acl.Peers[did] = PeerInfo{
+        DID:      did,
+        PubKeyEd: pubKeyEd,
+        PubKeyX:  pubKeyX,
+    }
+    return acl.Save()
 }
 
-// RemovePeer elimina un peer de la ACL
 func RemovePeer(did string) error {
-	acl, err := LoadACL()
-	if err != nil {
-		return err
-	}
-	if _, exists := acl.Peers[did]; !exists {
-		return nil
-	}
-	delete(acl.Peers, did)
-	return acl.Save()
+    acl, err := LoadACL()
+    if err != nil {
+        return err
+    }
+    delete(acl.Peers, did)
+    return acl.Save()
 }
 
-// ClearACL limpia toda la ACL
 func ClearACL() error {
-	acl := &ACL{Peers: make(map[string]PeerInfo)}
-	return acl.Save()
+    acl := &ACL{Peers: make(map[string]PeerInfo)}
+    return acl.Save()
+}
+
+func (id *Identity) GetACLSnippet() string {
+    pubEdHex := fmt.Sprintf("%x", id.PubKeyEd)
+    pubXHex := fmt.Sprintf("%x", id.PubKeyX[:])
+    return fmt.Sprintf("acl import %s %s %s", id.DID, pubEdHex, pubXHex)
 }

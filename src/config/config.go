@@ -12,12 +12,21 @@ type Config struct {
 Faro string `json:"faro"`
 }
 
-func GetConfigPath() string {
+// GetXionHome devuelve el directorio base de XionIA (Jaula de Faraday)
+func GetXionHome() string {
+if home := os.Getenv("XION_HOME"); home != "" {
+return home
+}
 home, err := os.UserHomeDir()
 if err != nil {
-return ".xion/config.json"
+return ".xion"
 }
-return filepath.Join(home, ".xion", "config.json")
+return filepath.Join(home, ".xion")
+}
+
+// GetConfigPath devuelve la ruta al archivo config.json dentro de la Jaula
+func GetConfigPath() string {
+return filepath.Join(GetXionHome(), "config.json")
 }
 
 func LoadConfig() (*Config, error) {
@@ -25,7 +34,10 @@ configPath := GetConfigPath()
 
 data, err := os.ReadFile(configPath)
 if err != nil {
+if os.IsNotExist(err) {
 return &Config{Faro: DefaultFaro}, nil
+}
+return nil, err
 }
 
 var cfg Config
@@ -44,7 +56,7 @@ func SaveConfig(cfg *Config) error {
 configPath := GetConfigPath()
 
 dir := filepath.Dir(configPath)
-if err := os.MkdirAll(dir, 0755); err != nil {
+if err := os.MkdirAll(dir, 0700); err != nil {
 return err
 }
 
@@ -53,7 +65,7 @@ if err != nil {
 return err
 }
 
-return os.WriteFile(configPath, data, 0644)
+return os.WriteFile(configPath, data, 0600)
 }
 
 func GetFaroAddr() string {
@@ -74,7 +86,10 @@ cfg, err := LoadConfig()
 if err != nil {
 cfg = &Config{}
 }
-
 cfg.Faro = addr
 return SaveConfig(cfg)
+}
+
+func ResetFaroAddr() error {
+return SetFaroAddr(DefaultFaro)
 }
