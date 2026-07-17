@@ -10,7 +10,7 @@
 
 ## XionIA Faraday - Red de Túneles Soberanos con Jaula de Faraday Lógica
 
-**Protocolo de red overlay soberana que elimina intermediarios. Comunicación E2E sobre UDP/WebSocket con cifrado Ed25519/X25519/ChaCha20-Poly1305, relay ciego (zero logs), y aislamiento criptográfico. Corre en servidores Xeon, TV boxes y Raspberry Pi.**
+**Protocolo de red overlay soberana que elimina intermediarios. Comunicación E2E sobre UDP/WebSocket/U2P con cifrado Ed25519/X25519/ChaCha20-Poly1305, relay ciego zero-knowledge (zero logs, zero metadata), aislamiento criptográfico en Jaula de Faraday, e integridad verificable de binarios. Corre en servidores Xeon, TV boxes, Raspberry Pi y cualquier dispositivo ARM64 con 1GB RAM. IA colaborativa distribuida con llama.cpp local y mercado libre de inferencia peer-to-peer. NAT traversal nativo: perfora CGNAT sin IP pública mediante U2P/XTP (Noise Protocol + Curve25519 + UDP hole punching).
 
 <div align="center">
   <img src="https://i.postimg.cc/V6bPWYdC/faro.jpg" alt="El Faro" width="380"/>
@@ -37,7 +37,7 @@ cd Web5-Mesh
 
 ```bash
 # Terminal 1 - Levantar Faro (UDP + WebSocket)
-./faro
+./faro ver mas en FAROS.md
 
 # Terminal 2 - Conectar nodo
 ./mesh shell
