@@ -2,14 +2,15 @@
 
 ## ¿Qué es un Faro?
 
-Un Faro es un nodo relay ciego que permite la comunicación entre nodos XionIA cuando no pueden conectarse directamente (NAT, CGNAT, firewalls). El Faro:
+Un Faro es un relay ciego que permite la comunicación entre nodos cuando no pueden conectarse directamente (NAT, CGNAT, firewalls).
 
 - **No lee contenido**: Solo retransmite blobs cifrados
 - **No guarda logs persistentes**: Opera en RAM volátil
 - **No sabe quién sos**: Solo ve DIDs y blobs cifrados
-- **Trunca IPs en logs**: Por privacidad, no muestra IPs completas
+- **Trunca IPs en logs**: Privacidad por diseño
 - **Soporte dual**: UDP (54321) + WebSocket (443)
 - **ACK**: Confirma entrega de mensajes
+- **Hash verificable**: El nodo verifica el binario del faro contra GitHub releases
 
 ---
 
@@ -18,13 +19,14 @@ Un Faro es un nodo relay ciego que permite la comunicación entre nodos XionIA c
 ### Compilar
 
 ```bash
-go build -trimpath -ldflags="-s -w" -o faro ./cmd/faro
+go build -o faro ./cmd/faro
 ```
 
 ### Ejecutar (UDP + WebSocket simultáneo)
 
 ```bash
 ./faro
+sudo -b ./faro > faro.log 2>&1 (modo root para puerto 443
 ```
 
 **Output:**
@@ -34,268 +36,140 @@ go build -trimpath -ldflags="-s -w" -o faro ./cmd/faro
 🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:443
 ```
 
-El Faro arranca en **dos puertos simultáneamente:**
-- **54321 UDP** (rápido, para redes locales)
-- **443 TCP** (WebSocket con TLS, para firewalls)
-
-### Variables de entorno (para el cliente)
-
-```bash
-# El faro escucha en 0.0.0.0:54321 y 0.0.0.0:443
-# Los clientes usan FARO_ADDR para conectarse
-export FARO_ADDR="190.220.45.26:54321"  # UDP
-# o
-export FARO_ADDR="190.220.45.26:443"    # WebSocket
-```
-
-### Certificados TLS (para WebSocket)
-
-El Faro espera `cert.pem` y `key.pem` en el directorio de ejecución.
-
-**Generar certificados autofirmados:**
+### Certificados TLS (WebSocket)
 
 ```bash
 openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=faro.local"
 ```
 
-**Output esperado:**
-```
-🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:443
-```
-
-**Nota:** Si no hay certificados, el WebSocket no arrancará.
-
-### Ejecutar en background
+### Background
 
 ```bash
 nohup ./faro > faro.log 2>&1 &
-tail -f faro.log
+tail -f ~/Web5-Mesh/faro.log
+(sudo)pkill -f faro
 ```
 
 ---
 
-## 🔧 Configuración del Router
+## 🎮 Comandos de Faro desde Mesh Shell
 
-### UDP (54321)
+Desde `./mesh shell`, el nodo gestiona su conexión a faros:
 
-**Por qué necesitas abrir el puerto:**  
-El Faro escucha en UDP 54321. Para que nodos externos puedan conectarse, tu router debe redirigir el tráfico entrante.
+### `faro set <addr>`
 
-**Configuración de Port Forwarding:**
+Configura un faro diferente al default.
+
+```bash
+xion@nodo:~$ faro set 192.168.1.100:54321
+✅ Faro configurado: 192.168.1.100:54321
+
+xion@nodo:~$ faro set 150.136.55.87:443
+✅ Faro configurado: 150.136.55.87:443 (WebSocket)
+```
+
+**El faro default es** `150.136.55.87:443` (WebSocket) o el definido en `config.json`.
+
+### `faro reset`
+
+Restaura al faro default.
+
+```bash
+xion@nodo:~$ faro reset
+✅ Faro reseteado a default: 150.136.55.87:443
+```
+
+## 🔧 Configuración de Red
+
+### Port Forwarding (UDP 54321)
 
 | Campo | Valor |
 |-------|-------|
-| **Nombre** | XionIA-Faro-UDP |
-| **Protocolo** | UDP |
-| **Puerto Externo** | 54321 |
-| **IP Interna** | 192.168.1.x (tu IP) |
-| **Puerto Interno** | 54321 |
+| Nombre | XionIA-Faro-UDP |
+| Protocolo | UDP |
+| Puerto Externo | 54321 |
+| IP Interna | 192.168.1.x |
+| Puerto Interno | 54321 |
 
-### WebSocket (443)
-
-**El puerto 443 usa TCP**, el mismo que HTTPS. Si ya tenés un servidor web, puede haber conflicto.
-
-**Verificar disponibilidad de 443:**
-```bash
-sudo netstat -tulpn | grep :443
-```
-
----
-
-## 🛡️ Firewall Local
-
-### Linux (ufw)
+### Firewall
 
 ```bash
+# Linux (ufw)
 sudo ufw allow 54321/udp
-sudo ufw allow 443/tcp   # para WebSocket
-sudo ufw enable
+sudo ufw allow 443/tcp
+sudo ufw allow 51820/udp  # U2P
+
+# Oracle Cloud
+# Security List: UDP 54321, TCP 443, UDP 51820 desde 0.0.0.0/0
 ```
-
-### Oracle Cloud (Security List)
-
-| Source Type | Source CIDR | Protocol | Port | Description |
-|-------------|-------------|----------|------|-------------|
-| CIDR | 0.0.0.0/0 | UDP | 54321 | XionIA UDP |
-| CIDR | 0.0.0.0/0 | TCP | 443 | XionIA WebSocket |
 
 ---
 
-## 🧠 CGNAT vs IP Pública
+## 🧠 CGNAT y U2P
 
-### El mito del puerto 443
+### El problema
 
-**El puerto 443 NO salta CGNAT.** Si tu ISP te asigna una IP privada (CGNAT), ningún puerto va a recibir conexiones entrantes, ni 443 ni ningún otro.
+CGNAT bloquea conexiones entrantes. Tu IP "pública" es compartida con miles de usuarios.
 
-**¿Para qué sirve el 443 entonces?**
+### La solución: U2P/XTP
 
-- Los ISP **no bloquean** el tráfico HTTPS (puerto 443).
-- En redes corporativas o públicas, el puerto 54321 (UDP) suele estar bloqueado.
-- El 443 está abierto en casi todos los firewalls.
-- Si tenés **IP pública**, podés usar 443 para que nodos detrás de firewalls estrictos puedan conectarse a tu Faro.
-
-### ¿Cómo se salta CGNAT?
-
-**La única forma real:**
-
-1. **Levantar un Faro con IP pública** (ej: Oracle Free Tier, VPS).
-2. **Todos los nodos (incluso detrás de CGNAT) se conectan SALIENTE a ese Faro**.
-3. **El Faro reenvía los mensajes** entre los nodos.
-
-**Flujo:**
+Protocolo propio (Noise IK + Curve25519 + UDP hole punching) que perfora CGNAT:
 
 ```
-Nodo A (CGNAT) ──(saliente)──> Faro (IP pública) ──(saliente)──> Nodo B (CGNAT)
+Nodo A (CGNAT) ──(saliente U2P)──> Bootstrap (IP pública) <──(saliente U2P)── Nodo B (CGNAT)
 ```
 
-**El Faro actúa como relay**, no como túnel CGNAT. Los nodos siempre inician la conexión hacia afuera.
+El faro volátil **inicia** conexión saliente. El CGNAT abre un agujero. Persistent keepalive (25s) lo mantiene abierto.
 
-### Puertos para conexiones salientes
+### Modos de Faro
 
-- **UDP (54321)**: Más rápido, recomendado.
-- **WebSocket (443)**: Más lento (TLS overhead), pero pasa firewalls más restrictivos.
-
-**Ambos requieren IP pública en el Faro.** La diferencia es qué puerto puede atravesar el firewall del nodo cliente.
+| Modo | IP Pública | Uso |
+|------|------------|-----|
+| **Server** | ✅ Sí | Escucha U2P entrante en 51820 |
+| **Volátil** | ❌ No | Se conecta a bootstrap node |
 
 ---
 
 ## 📋 Protocolo del Faro
 
-El Faro entiende 4 comandos:
-
-### ANNOUNCE
-Un nodo se registra en el Faro.
-
-```
-ANNOUNCE did:maia:xxxxx
-```
-
-El Faro guarda `DID → dirección` en su registro en RAM.
-
-### RELAY
-Un nodo pide al Faro que retransmita un mensaje a otro nodo.
-
-```
-RELAY did:destino did:emisor payload_cifrado
-```
-
-El Faro busca el destino en su registro y reenvía. Si existe, envía ACK al emisor.
-
-### RESPONSE
-Un nodo responde a un mensaje recibido vía RELAY.
-
-```
-RESPONSE did:destino payload_cifrado
-```
-
-El Faro usa `lastClient` para reenviar la respuesta al nodo original.
-
-### ACK
-Confirmación de entrega (enviada automáticamente por el Faro).
-
-```
-ACK did:emisor did:destino
-```
+| Comando | Función |
+|---------|---------|
+| `ANNOUNCE` | Registra DID → dirección en RAM |
+| `RELAY` | Reenvía payload cifrado, guarda lastClient |
+| `RESPONSE` | Reenvía a lastClient |
+| `ACK` | Confirma entrega al emisor |
+| `WHERE_IS` | Responde READY / NOT_FOUND |
+| `VERIFY_HASH` | Responde hash SHA256 del binario |
 
 ---
 
 ## 🔍 Verificación
 
-### Ver que el Faro está escuchando
-
 ```bash
-# UDP
+# Ver que escucha
 sudo ss -ulnp | grep 54321
-
-# WebSocket
 sudo ss -tlnp | grep :443
-```
 
-**Output esperado:**
-```
-UNCONN 0 0 *:54321 *:* users:(("faro",pid=650,fd=3))
-LISTEN 0 0 *:443 *:* users:(("faro",pid=650,fd=4))
-```
-
-### Ver logs en tiempo real
-
-```bash
+# Ver logs
 tail -f faro.log
-```
 
-**Logs esperados:**
-```
-🚀 Iniciando Faro Dual (UDP + WebSocket)
-🛡️ [FARO-UDP] Relay Ciego en 0.0.0.0:54321
-🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:443
-[FARO-UDP] 📥 ANNOUNCE: did:maia:xxxxx desde 190.220.*.*
-[FARO-UDP] 📤 RELAY: reenviando a did:maia:yyyyy (104.28.*.*)
-[FARO-UDP] ✅ ACK enviado a did:maia:xxxxx
-```
-
-### Ver tráfico en tiempo real
-
-```bash
+# Ver tráfico
 sudo tcpdump -i any udp port 54321
-sudo tcpdump -i any tcp port 443
 ```
 
 ---
 
-## 🔄 Problemas Comunes
+## ✅ Checklist para Levantar un Faro
 
-### "No puedo conectarme desde afuera"
-
-| Problema | Solución |
-|----------|----------|
-| Port forwarding no configurado | Configurar en el router |
-| Firewall local bloqueando | `sudo ufw allow 54321/udp` |
-| IP pública cambió | Usar DNS dinámico |
-| ISP usa CGNAT | Usar WebSocket (443) o VPS |
-
-### "WebSocket no arranca"
-
-**Causa:** No hay certificados TLS.
-
-**Solución:**
-```bash
-openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=faro.local"
-```
-
-### "El puerto 443 está ocupado"
-
-**Causa:** Otro servicio (nginx, apache) usa el puerto 443.
-
-**Soluciones:**
-1. Detener el otro servicio
-2. Usar solo UDP (54321)
-3. Modificar el puerto en el código (futuro)
+- [ ] Compilar: `go build -trimpath -ldflags="-s -w" -o faro ./cmd/faro`
+- [ ] Generar certificados TLS
+- [ ] Configurar port forwarding UDP 54321
+- [ ] Configurar firewall: 54321/udp, 443/tcp, 51820/udp
+- [ ] Ejecutar: `nohup ./faro > faro.log 2>&1 &`
+- [ ] Verificar logs
+- [ ] Probar conexión desde otro nodo
 
 ---
 
-## 🧭 Checklist para Levantar un Faro
-
-- [ ] Compilar el Faro: `go build -trimpath -ldflags="-s -w" -o faro ./cmd/faro`
-- [ ] Generar certificados TLS: `openssl req ...`
-- [ ] Identificar IP interna: `ip addr show`
-- [ ] Configurar port forwarding: UDP 54321 → IP interna
-- [ ] Configurar firewall local: `sudo ufw allow 54321/udp`
-- [ ] Ejecutar el Faro: `nohup ./faro > faro.log 2>&1 &`
-- [ ] Verificar logs: `tail -f faro.log`
-- [ ] Probar desde otra red: conectar nodo desde celular
-- [ ] Confirmar ANNOUNCE y ACK en logs
-
----
-
-## 🔮 Limitaciones Actuales
-
-- ❌ Puerto UDP hardcodeado (54321)
-- ❌ No se puede deshabilitar WebSocket (443)
-- ❌ Certificados TLS fijos (`cert.pem`, `key.pem`)
-- ❌ Sin detección automática de IP pública
-
-**Estas limitaciones se resolverán en futuras versiones.**
-
----
-
-*Última actualización: Julio 2026*
+*XionIA Faraday — Sovereign overlay network with blind relay, E2E encryption, Faraday Cage isolation, and NAT traversal.*
+*Última actualización: 17 de Julio de 2026*
