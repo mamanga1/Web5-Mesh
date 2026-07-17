@@ -1,77 +1,98 @@
 # 📜 XionIA Whitepaper: Sovereign Overlay Network
 
-## 🌐 Abstract
-XionIA es un protocolo de red overlay diseñado para restaurar la soberanía digital en entornos de infraestructura hostil. A diferencia de las redes de anonimato tradicionales (como Tor) o las redes descentralizadas complejas (como I2P), XionIA introduce una arquitectura basada en **Túneles U2P (User-to-User)** y **Relays Ciegas (Blind Relays)**. 
+## Abstract
 
-El objetivo de XionIA es democratizar la infraestructura de privacidad, permitiendo que dispositivos de bajo consumo (desde TV Boxes, Raspberry Pi, Celulares, Tablets, PC, Net-Notebooks con 1gb de ram a equipos de mayor escala) se conviertan en nodos soberanos de una red resistente a la censura, sin depender de autoridades centrales ni de hardware costoso.
+XionIA es un protocolo de red overlay que restaura la soberanía digital. Basado en **túneles U2P (User-to-Peer)**, **relays ciegos zero-knowledge**, y **criptografía E2E** (Ed25519/X25519/ChaCha20-Poly1305). Corre en cualquier hardware: desde TV boxes de 1GB RAM hasta Xeon servers.
 
 ---
 
-## 1. El Problema: Centralización y Vigilancia Infraestructural
+## 1. El Problema
 
-La arquitectura actual de Internet (Web2) ha concentrado el control del tráfico en un puñado de intermediarios (ISPs, CDNs, Cloud Providers). Esto ha generado dos problemas críticos:
+Internet centralizó el control en ISPs, CDNs y cloud providers. Esto genera:
 
-1.  **Fragilidad ante la Censura:** Si un intermediario central decide bloquear un flujo de datos (DPI - Deep Packet Inspection) o un dominio (DNS takedown), la comunicación se interrumpe.
-2.  **Exclusión Tecnológica:** Las soluciones de privacidad actuales (como correr un nodo de Tor o ejecutar validadores de blockchain) requieren hardware dedicado, alto consumo energético y conocimientos técnicos avanzados, excluyendo a la mayoría de los usuarios.
+- **Censura:** DPI, DNS takedowns, bloqueos selectivos
+- **Vigilancia:** Metadata masiva recolectada por corporaciones y estados
+- **Exclusión:** Las soluciones actuales (Tor, I2P) requieren hardware dedicado y conocimiento técnico avanzado
 
-**Necesidad:** Se requiere una capa de transporte que sea invisible para los ISPs, resistente a la censura, y que pueda ejecutarse en hardware reciclado o de bajo costo.
+**Necesidad:** Una capa de transporte invisible para ISPs, resistente a censura, ejecutable en hardware reciclado.
 
 ---
 
 ## 2. La Solución: Arquitectura XionIA
 
-XionIA resuelve estos problemas mediante tres innovaciones arquitectónicas:
+### A. Túneles U2P (User-to-Peer)
 
-### A. Túneles U2P (User-to-User)
-A diferencia de las redes P2P que propagan datos saltando de nodo en nodo (lo que expone metadatos), XionIA establece **túneles directos cifrados** entre dos extremos. Si el NAT lo impide, se utiliza un Relay, pero el contenido nunca se descifra en tránsito.
+Túneles directos cifrados entre dos extremos. Si el NAT lo impide, se usa un Relay, pero el contenido **nunca** se descifra en tránsito. U2P perfora CGNAT vía UDP hole punching + persistent keepalive (Noise Protocol IK, Curve25519).
 
-### B. El Relay Ciego (Blind Relay)
-El nodo "Faro" actúa como un intermediario agnóstico. 
-- **No lee contenido:** Solo retransmite paquetes UDP/WebSocket cifrados con padding aleatorio (anti-DPI).
-- **No guarda registros:** Operación en memoria RAM volátil.
-- **Zero-Knowledge:** El Relay no sabe quién se comunica con quién, solo sabe que existe tráfico.
-- **ACK (Confirmación):** Garantiza la entrega del mensaje al emisor.
+### B. Relay Ciego (Faro)
 
-### C. Soberanía en el Edge (Hardware Reciclado)
-El stack criptográfico de XionIA está optimizado para arquitecturas **ARM64**. Esto permite transformar dispositivos descartados (TV Boxes Android) en nodos de infraestructura crítica, creando una red distribuida física real, no virtual.
+- **No lee contenido:** Solo retransmite paquetes cifrados con padding anti-DPI
+- **No guarda registros:** Operación 100% en RAM volátil
+- **Zero-knowledge:** No sabe quién se comunica con quién
+- **ACK:** Garantiza entrega al emisor
+- **Hash verificable:** El nodo verifica el binario del faro contra GitHub releases antes de confiar
 
----
+### C. Soberanía en el Edge
 
-## 3. Análisis Comparativo: XionIA vs. Alternativas
+Stack optimizado para **ARM64**. TV boxes, Raspberry Pi, celulares, tablets, PCs con 1GB RAM — todos son nodos soberanos.
 
-Para entender el valor diferencial de XionIA, lo comparamos con los estándares actuales de la industria:
+### D. IA Colaborativa Distribuida
 
-| Característica | **Tor Network** | **I2P** | **Nostr / Relay Servers** | **XionIA** |
-| :--- | :--- | :--- | :--- | :--- |
-| **Topología** | Circuitos de 3 saltos | Túneles unidireccionales | Client-Server (Federado) | **Túneles Directos (U2P)** |
-| **Latencia** | Alta (por los saltos) | Media/Alta | Baja | **Baja (Directa)** |
-| **Hardware Mínimo** | Medio (Requiere RAM/PC) | Alto (Java/Garlic Routing) | Bajo (VPS estándar) | **Muy Bajo (TV Box 1GB)** |
-| **Resistencia a DPI** | Media (Puertos conocidos) | Media | Nula (Tráfico claro si no se cifra app) | **Alta (UDP + Padding)** |
-| **Modelo de Confianza** | Directorio Centralizado | Floodfill (Complejo) | Confianza en el Relay | **Trustless (Cifrado E2E)** |
-| **Censura** | Bloqueo de nodos de entrada | Complejo de borrar | Bloqueo de dominio/IP | **Resistente (Sin IP pública)** |
-
-**Ventaja Clave de XionIA:** Combina la **baja latencia** de una conexión directa con la **resistencia a la censura** de una red overlay, ejecutándose en hardware que cualquier persona tiene en su casa.
+Agentes autónomos con **llama.cpp** local en cada nodo. Participan en grupos cifrados E2E como peers más. Mercado libre de inferencia: `ia list` descubre servicios en el faro (como `/list` del IRC), `ia use` conecta E2E a otro nodo, `ia offer` publica tu inferencia. Gratis, trueque, o sats — sin intermediarios.
 
 ---
 
-## 4. Impacto Social y Casos de Uso
+## 3. Comparativa
 
-XionIA no es solo una herramienta técnica, es una infraestructura de derechos humanos digitales:
+| Característica | Tor | I2P | Nostr | **XionIA** |
+|:---|:---|:---|:---|:---|
+| Topología | 3 saltos | Túneles unidireccionales | Client-Server | **Túneles directos U2P** |
+| Latencia | Alta | Media/Alta | Baja | **Baja** |
+| Hardware mínimo | Medio | Alto | Bajo | **Muy bajo (1GB RAM)** |
+| Resistencia DPI | Media | Media | Nula | **Alta (UDP + padding)** |
+| CGNAT | ❌ No | ❌ No | ❌ No | **✅ Perforado** |
+| IA distribuida | ❌ No | ❌ No | ❌ No | **✅ llama.cpp local + mercado P2P** |
+| Confianza | Directorio centralizado | Floodfill complejo | Confianza en relay | **Trustless E2E** |
 
-1.  **Periodismo y Activismo:** Permite comunicación segura en regiones con censura gubernamental o apagones de internet selectivos.
-2.  **Privacidad por Defecto:** Ofrece a usuarios comunes una alternativa a WhatsApp/Telegram donde la metadata no es recolectada por una empresa central.
-3.  **Resiliencia ante Desastres:** Al poder operar en mallas locales o a través de ISPs hostiles, permite la coordinación en situaciones de crisis de red.
-4.  **Democratización:** Elimina la barrera de entrada económica para participar en la infraestructura de internet.
+**Ventaja clave:** Baja latencia de conexión directa + resistencia censura de red overlay + hardware accesible + IA sin cloud.
+
+---
+
+## 4. Impacto Social
+
+| Caso de uso | Descripción |
+|:---|:---|
+| **Periodismo/Activismo** | Comunicación segura en regiones con censura o apagones selectivos |
+| **Privacidad por defecto** | Alternativa a WhatsApp/Telegram sin metadata centralizada |
+| **Resiliencia** | Coordinación en crisis de red, mallas locales |
+| **Democratización** | Cualquiera con un TV box es infraestructura |
+| **IA soberana** | Modelos locales + mercado libre, sin OpenAI, sin AWS |
 
 ---
 
-## 5. Conclusión
+## 5. Stack Técnico
 
-XionIA representa un cambio de paradigma: pasar de confiar en servidores centralizados a confiar en matemáticas y hardware distribuido. Es una infraestructura diseñada para sobrevivir, resistir y proteger la comunicación humana en la era de la vigilancia masiva.
-
-**"La red donde los túneles cifrados son dueños de sus propias rutas."**
+| Capa | Tecnología |
+|:---|:---|
+| Identidad | Ed25519 DID (`did:maia:...`) |
+| Intercambio de claves | X25519 ECDH |
+| Cifrado | ChaCha20-Poly1305 AEAD |
+| Handshake | Noise Protocol IK |
+| Transporte | UDP 54321 / WebSocket 443 / U2P |
+| Anti-DPI | Padding con `crypto/rand` |
+| IA | llama.cpp (GGUF) |
+| Integridad | SHA256 verificable vs GitHub releases |
 
 ---
-*Documento preparado por el equipo de desarrollo de XionIA.*
-*Repositorio: github.com/mamanga1/Web5-Mesh*
-*Última actualización: 10 de Julio de 2026*
+
+## 6. Conclusión
+
+XionIA es un cambio de paradigma: de confiar en servidores centralizados a confiar en matemáticas y hardware distribuido. Una infraestructura diseñada para sobrevivir, resistir, y proteger la comunicación humana — y ahora también la inteligencia artificial — en la era de la vigilancia masiva.
+
+> **"La red donde los túneles cifrados son dueños de sus propias rutas."**
+
+---
+
+*XionIA Faraday — Sovereign overlay network with blind relay, E2E encryption, Faraday Cage isolation, and NAT traversal.*
+*Repositorio: github.com/xionia/web5-mesh*
+*Última actualización: 17 de Julio de 2026*
