@@ -13,7 +13,7 @@
 
 ### `whoami` ✅
 
-Muestra tu identidad actual, DID y claves públicas.
+Muestra tu identidad actual, DID y claves públicas. Incluye el comando `acl import` listo para copy-paste.
 
 ```
 xion@nodo:~$ whoami
@@ -23,6 +23,10 @@ xion@nodo:~$ whoami
   DID: did:maia:5XVNWhUtMNHLBVti6e93nSJZT25RtXUpeYYnywmHoC1i
   PubKey Ed25519: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
   PubKey X25519:  xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+  📋 Para que otro nodo te agregue, decile que ejecute:
+  acl import did:maia:5XVNWhUtMNHLBVti6e93nSJZT25RtXUpeYYnywmHoC1i ed_pubkey_hex x_pubkey_hex
+  alias add <nick> did:maia:5XVNWhUtMNHLBVti6e93nSJZT25RtXUpeYYnywmHoC1i
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -152,8 +156,6 @@ xion@nodo:~$ group remove devs
 xion@nodo:~$ group remove devs did:maia:XYZ789...
 ✅ Miembro removido del grupo 'devs'
 ```
-
-**Nota:** `group kick` no es un comando separado; se usa `group remove` con el DID del miembro a expulsar.
 
 ### `group send <alias> <mensaje>` ✅
 
@@ -360,7 +362,7 @@ xion@nodo:~$ touch nuevo.txt
 ✅ Archivo 'nuevo.txt' creado/actualizado.
 ```
 
-### `/edit` ✅
+### `edit <archivo>` / `/edit <archivo>` ✅
 
 Editor de texto integrado (usa `:wq` para guardar y salir).
 
@@ -401,23 +403,35 @@ mamanga@node-379-core:~/Web5-Mesh$
 - ✅ Restaura la terminal a su estado original
 - ✅ Vuelve al shell del sistema
 
+---
+
+## 📡 Faro
+
 ### `faro set <addr>` ✅
 
-Configura la dirección del faro.
+Configura la dirección de un faro diferente al default. Útil para conectar a faros alternativos o privados.
 
 ```
-xion@nodo:~$ faro set 190.220.45.26:54321
-✅ Faro configurado: 190.220.45.26:54321
+xion@nodo:~$ faro set 192.168.1.100:54321
+✅ Faro configurado: 192.168.1.100:54321
+
+xion@nodo:~$ faro set 150.136.55.87:443
+✅ Faro configurado: 150.136.55.87:443 (WebSocket)
 ```
+
+**Nota:** El faro default es `150.136.55.87:443` (WebSocket) o el definido en `config.json`.
 
 ### `faro reset` ✅
 
-Resetea la configuración del faro.
+Restaura la configuración del faro al default.
 
 ```
 xion@nodo:~$ faro reset
-✅ Faro reseteado
+✅ Faro reseteado a default: 150.136.55.87:443
 ```
+---
+
+## ⚠️ Comandos Destructivos
 
 ### `clear` ⚠️
 
@@ -433,11 +447,14 @@ xion@nodo:~$ clear
 
 ```
 xion@nodo:~$ clear --force
-✅ Identidad y ACL eliminadas permanentemente
+✅ Jaula de Faraday reiniciada:
+   ├── node.key eliminado (identidad borrada)
+   ├── acl.json eliminado (pares de confianza borrados)
+   └── Reiniciá la shell para generar nueva identidad.
 ```
 
 **Uso recomendado:** Siempre usar `clear` sin `--force` para evitar borrados accidentales. El `--force` solo para scripts o cuando estés 100% seguro.
 
-
+---
 
 *Referencia completa de comandos de XionIA - La Xión Digital 🦾*
