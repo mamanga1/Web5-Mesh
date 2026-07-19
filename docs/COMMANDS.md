@@ -216,8 +216,65 @@ xion@nodo:~$ chat amigo "Hola, ¿cómo estás?"
 💬 [amigo]: CHAT:Hola, todo bien
 ```
 
----
+## ⚡ Modo Chat Rápido (`/to`)
 
+### `/to <alias>` ✅
+
+Activa el **modo chat rápido** con un alias. Una vez activado, podés escribir mensajes directamente (sin comillas, sin `chat`), y se enviarán automáticamente al alias seleccionado.
+
+```
+xion@nodo:~$ /to xeon
+📡 Modo chat con 'xeon'. Escribí el mensaje y dale Enter.
+xion@nodo:~$ Hola, ¿cómo andás?
+✅ Mensaje entregado
+xion@nodo:~$ Todo bien por acá
+✅ Mensaje entregado
+```
+
+### `/to <alias> on` ✅
+
+Activa el modo chat rápido **con historial de mensajes en sesión**. Los mensajes se guardan en memoria y se muestran al volver a entrar al modo.
+
+```
+xion@nodo:~$ /to xeon on
+📡 Modo chat con 'xeon' (historial activado). Escribí y dale Enter.
+xion@nodo:~$ Hola
+✅ Mensaje entregado
+xion@nodo:~$ Todo bien?
+✅ Mensaje entregado
+xion@nodo:~$ /to xeon
+📜 Historial de mensajes con 'xeon':
+  1. Hola
+  2. Todo bien?
+📡 Modo chat con 'xeon'. Escribí y dale Enter.
+```
+
+### `/to <alias> off` ✅
+
+Desactiva el historial de mensajes para ese alias (el modo chat sigue activo).
+
+```
+xion@nodo:~$ /to xeon off
+📡 Modo chat con 'xeon' (historial desactivado).
+```
+
+### `/to off` ✅
+
+Vuelve al modo normal (desactiva el modo chat rápido). A partir de ahí, necesitás usar `chat <alias> <msg>` nuevamente.
+
+```
+xion@nodo:~$ /to off
+✅ Modo normal. Usá 'chat <alias> <msg>' o 'group send <alias> <msg>'.
+```
+
+**Comportamiento del historial:**
+- El historial de mensajes **solo vive en la sesión actual**.
+- Al hacer `exit`, **todo se borra** (privacidad total).
+- Las flechas ↑/↓ navegan por el historial de **comandos** de la sesión (no mensajes).
+
+*Nota:* El historial de comandos también es efímero: se borra al salir de la shell. Nada persiste entre sesiones.
+
+---
 ## 🛡️ Jaula de Faraday (Bóveda Soberana)
 
 ### `import <ruta_host>` ✅
