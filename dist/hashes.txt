@@ -1,0 +1,6 @@
+# XionIA Kernel
+# Generado: 2026-07-19T18:10:28Z
+# Host: node-379-core
+
+mesh-linux-amd64  732d89c5f590f7aa697eaeb7132988457db4695533fd30648e4e1aecc8165dc3  9381903
+faro-linux-amd64  1f322e0b4c510a35f270593f10d4e800d46a2039328d6f50bbeded41afaa7907  9105458
