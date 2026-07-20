@@ -27,3 +27,5 @@ alias.json
 *.bak
 *.zip
 *.tar.gz
+dist/
+release.key
