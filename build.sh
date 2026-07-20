@@ -65,15 +65,15 @@ fi
 if [[ "$1" == "arm64" ]]; then
     echo ""
     echo "🔧 Compilando para ARM64 (TV Boxes, Raspberry Pi)..."
-    
+
     # Compilar Faro para ARM64
     echo "⚙️  Compilando Faro (ARM64)..."
     GOOS=linux GOARCH=arm64 go build -o faro-linux-arm64 ./cmd/faro
-    
+
     # Compilar Mesh para ARM64
     echo "⚙️  Compilando Mesh (ARM64)..."
     GOOS=linux GOARCH=arm64 go build -o mesh-linux-arm64 ./cmd/mesh
-    
+
     if [ -f mesh-linux-arm64 ] && [ -f faro-linux-arm64 ]; then
         echo ""
         echo "✅ Compilación ARM64 exitosa!"
@@ -91,3 +91,41 @@ if [[ "$1" == "arm64" ]]; then
         exit 1
     fi
 fi
+
+# ============================================================
+# 9. Generar hashes SHA256 de todos los binarios
+# ============================================================
+echo ""
+echo "🔐 Generando hashes SHA256..."
+
+# Crear directorio dist si no existe
+mkdir -p dist
+
+# Copiar binarios a dist (si existen)
+[ -f mesh ] && cp mesh dist/mesh-linux-amd64
+[ -f faro ] && cp faro dist/faro-linux-amd64
+[ -f mesh-linux-arm64 ] && cp mesh-linux-arm64 dist/mesh-linux-arm64
+[ -f faro-linux-arm64 ] && cp faro-linux-arm64 dist/faro-linux-arm64
+
+# Generar hashes.txt
+echo "# XionIA Kernel" > dist/hashes.txt
+echo "# Generado: $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> dist/hashes.txt
+echo "# Host: $(hostname)" >> dist/hashes.txt
+echo "" >> dist/hashes.txt
+
+for f in dist/mesh-* dist/faro-*; do
+    if [ -f "$f" ]; then
+        HASH=$(sha256sum "$f" | awk '{print $1}')
+        SIZE=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null)
+        NAME=$(basename "$f")
+        echo "$NAME  $HASH  $SIZE" >> dist/hashes.txt
+    fi
+done
+
+echo ""
+echo "✅ Hashes generados en dist/hashes.txt"
+echo ""
+cat dist/hashes.txt
+echo ""
+echo "📋 Para verificar un binario:"
+echo "   ./mesh verify"

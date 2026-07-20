@@ -413,7 +413,18 @@ sendToFaro(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload)))
 }
 }
 
+// ============================================================
+// MAIN
+// ============================================================
+
 func main() {
+// ✅ Comando verify (sin entrar al shell)
+if len(os.Args) >= 2 && os.Args[1] == "verify" {
+ok, msg := selfVerify()
+printVerify(ok, msg)
+return
+}
+
 if len(os.Args) < 2 || os.Args[1] == "shell" {
 runInteractiveShell()
 return
