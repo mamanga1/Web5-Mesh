@@ -98,9 +98,6 @@ if err != nil {
 return nil, err
 }
 
-// ============================================================
-// 🔍 LOGS DE DEPURACIÓN
-// ============================================================
 fmt.Printf("🔍 DEBUG: ACL cargada con %d peers\n", len(acl.Peers))
 
 index := make(map[[4]byte]peerKeys)
@@ -153,10 +150,6 @@ return fmt.Sprintf("✅ Recibido: %s", strings.TrimPrefix(cmd, "CHAT:"))
 }
 return "✅ ACK"
 }
-
-// ============================================================
-// CONEXIÓN AL FARO - DETECCIÓN AUTOMÁTICA POR PUERTO
-// ============================================================
 
 func connectToFaro() error {
 faroAddr := getFaroAddr()
@@ -218,10 +211,6 @@ return "", err
 }
 return string(buf[:n]), nil
 }
-
-// ============================================================
-// ExecuteRealCommand - VERSIÓN CON ACK ASÍNCRONO
-// ============================================================
 
 func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string {
 acl, err := crypto.LoadACL()
@@ -418,13 +407,6 @@ sendToFaro(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload)))
 // ============================================================
 
 func main() {
-// ✅ Comando verify (sin entrar al shell)
-if len(os.Args) >= 2 && os.Args[1] == "verify" {
-ok, msg := selfVerify()
-printVerify(ok, msg)
-return
-}
-
 if len(os.Args) < 2 || os.Args[1] == "shell" {
 runInteractiveShell()
 return
