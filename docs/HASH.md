@@ -9,65 +9,39 @@ Esto es clave para:
 
 ---
 
-## 📋 Archivos de Hashes
+## 📋 Sistema de Verificación
 
-Los hashes oficiales se publican en el repositorio:
+XionIA usa **minisign** para firmar los hashes de los binarios.
 
-```
-https://github.com/mamanga1/Web5-Mesh/blob/main/dist/hashes.txt
-```
-
-**Formato:**
-```
-# XionIA Kernel
-# Generado: 2026-07-19T22:07:04Z
-# Host: debian
-
-mesh-linux-amd64  1f6c834e26d172e58c7dfdbe6baa58188fd0577641e97223549a09b55f9a6f21  9393212
-faro-linux-amd64  60703683cf9e3beaafbf4821168384cf5f61260d803cb9ce46497c880b5bc86a  9112747
-```
+- **Clave pública:** `release.pub` (disponible en el repo)
+- **Clave privada:** Solo en posesión del equipo de desarrollo (NUNCA subida)
+- **Archivos de hashes:** Publicados en GitHub Releases con su firma `.minisig`
 
 ---
 
 ## 🧪 Verificación Local (con el repo clonado)
 
-### 1. Compilar y generar hashes
+### 1. Compilar
 
 ```bash
 cd ~/Web5-Mesh
 ./build.sh
 ```
 
-### 2. Verificar el binario `mesh`
+### 2. Verificar con `verify.sh`
 
 ```bash
-./mesh verify
+./verify.sh
 ```
 
 **Salida esperada:**
 ```
-🔍 Verificación de binario
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-✅ mesh-linux-amd64 verificado
-  hash: 1f6c834e...
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-```
+🔍 Verificando XionIA v1.0.1
+Signature and comment signature verified
+Trusted comment: XionIA v1.0.1
 
-### 3. Verificar el binario `faro` localmente
-
-```bash
-./verify_all.sh
-```
-
-**Salida esperada:**
-```
-🔍 Verificando mesh...
-✅ mesh-linux-amd64 verificado
-  hash: 1f6c834e...
-
-🔍 Verificando faro...
-✅ faro-linux-amd64 verificado
-  hash: 60703683...
+✅ Si ves 'Signature verified', los hashes son auténticos.
+📋 Podés comparar el hash de tu binario con el de hashes-v1.0.1.txt
 ```
 
 ---
@@ -75,13 +49,55 @@ cd ~/Web5-Mesh
 ## 📡 Verificación Remota (sin clonar el repo)
 
 ### Requisitos
-- **Cualquier consola** (Linux, macOS, Windows con WSL, o con Python instalado)
-- **Cliente UDP** (`nc` en Linux/macOS, o un script simple en Python)
-- **El Faro debe estar corriendo** y accesible en la red
+- **minisign instalado** ([descargar](https://github.com/jedisct1/minisign/releases))
+- **curl** o **wget**
+
+### 1. Descargar los archivos necesarios
+
+```bash
+# Clave pública
+curl -LO https://raw.githubusercontent.com/mamanga1/Web5-Mesh/main/release.pub
+
+# Hashes y firma
+curl -LO https://github.com/mamanga1/Web5-Mesh/releases/download/v1.0.1/hashes-v1.0.1.txt
+curl -LO https://github.com/mamanga1/Web5-Mesh/releases/download/v1.0.1/hashes-v1.0.1.txt.minisig
+```
+
+### 2. Verificar la firma
+
+```bash
+PUBKEY=$(grep -v '^untrusted comment:' release.pub | tr -d ' ')
+minisign -Vm hashes-v1.0.1.txt -P "$PUBKEY"
+```
+
+**Salida esperada:**
+```
+Signature and comment signature verified
+Trusted comment: XionIA v1.0.1
+```
 
 ---
 
-### Opción 1: Puerto UDP (54321) — con `nc`
+## 🔍 Verificar un Binario Descargado
+
+```bash
+# 1. Descargar el binario (ej: faro)
+curl -LO https://github.com/mamanga1/Web5-Mesh/releases/download/v1.0.1/faro
+
+# 2. Calcular su hash
+sha256sum faro
+
+# 3. Buscar el hash en hashes-v1.0.1.txt
+cat hashes-v1.0.1.txt | grep faro
+```
+
+**Si los hashes coinciden, el binario es el oficial.**
+
+---
+
+## 📡 Verificación del Faro Remoto (UDP)
+
+### Con `nc` (Linux/macOS)
 
 ```bash
 echo '{"cmd":"VERIFY_HASH"}' | nc -u -w2 190.220.45.26 54321
@@ -89,75 +105,15 @@ echo '{"cmd":"VERIFY_HASH"}' | nc -u -w2 190.220.45.26 54321
 
 **Respuesta esperada:**
 ```json
-{"hash":"60703683cf9e3beaafbf4821168384cf5f61260d803cb9ce46497c880b5bc86a","size":9112747,"commit":"","built":"","version":""}
+{"hash":"60703683cf9e3bea...","size":9112747,"commit":"","built":"","version":""}
 ```
 
----
-
-### Opción 2: Puerto WebSocket (443) — con `wscat` o Python
-
-#### Con `wscat` (instalar con npm)
+### Comparar con el hash oficial
 
 ```bash
-wscat -c wss://190.220.45.26:443/ws
-> {"cmd":"VERIFY_HASH"}
-```
-
-#### Con Python (sin dependencias)
-
-```bash
-python3 -c "
-import socket, json, ssl, base64
-# WebSocket handshake manual
-import websocket  # si está instalado
-# O usar una herramienta como wscat
-"
-```
-
-**Nota:** El puerto 443 requiere una conexión WebSocket. Para verificaciones simples desde consola, recomendamos usar el puerto UDP 54321.
-
----
-
-### Opción 3: Script `verify_faro.py` (universal)
-
-```bash
-curl -s https://raw.githubusercontent.com/mamanga1/Web5-Mesh/main/verify_faro.py -o verify_faro.py
-python3 verify_faro.py 190.220.45.26:54321
-```
-
-**Salida esperada:**
-```
-🔍 Verificando faro 190.220.45.26:54321
-   Release: v1.0.1
-
-📡 Faro responde:
-   Hash:   60703683cf9e3bea...
-   Size:   9,112,747 bytes
-   Commit:
-   Versión:
-
-📋 GitHub oficial (v1.0.1):
-   Hash:   60703683cf9e3bea...
-   Size:   9,112,747 bytes
-
-✅ FARO VERIFICADO
-   El binario corresponde exactamente al release oficial.
-```
-
----
-
-## 🔍 Comparación Manual
-
-Si querés verificar manualmente:
-
-```bash
-# 1. Preguntar al Faro (UDP 54321)
 FARO_HASH=$(echo '{"cmd":"VERIFY_HASH"}' | nc -u -w2 190.220.45.26 54321 | grep -o '"hash":"[^"]*"' | cut -d'"' -f4)
+OFFICIAL_HASH=$(grep faro-linux-amd64 hashes-v1.0.1.txt | awk '{print $2}')
 
-# 2. Descargar hash oficial
-OFFICIAL_HASH=$(curl -s https://raw.githubusercontent.com/mamanga1/Web5-Mesh/main/dist/hashes.txt | grep faro-linux-amd64 | awk '{print $2}')
-
-# 3. Comparar
 if [ "$FARO_HASH" == "$OFFICIAL_HASH" ]; then
     echo "✅ FARO VERIFICADO"
 else
@@ -167,56 +123,28 @@ fi
 
 ---
 
-### Para WebSocket (443) con `wscat`
-
-```bash
-# Instalar wscat si no lo tenés
-npm install -g wscat
-
-# Conectar al Faro
-wscat -c wss://190.220.45.26:443/ws
-
-# Enviar el comando
-{"cmd":"VERIFY_HASH"}
-
-# Respuesta:
-{"hash":"60703683cf9e3bea...","size":9112747,"commit":"","built":"","version":""}
-```
-
----
-
 ## 🛡️ Seguridad
 
 | Qué protege | Cómo |
 |-------------|------|
 | **Faro modificado** | El hash no coincide con el oficial |
-| **Ataque MITM** | El hash se compara con GitHub (HTTPS) |
-| **Binario viejo** | El tamaño y hash no coinciden |
-| **Faro clonado** | La firma (cuando se agregue) lo detectará |
+| **Ataque MITM** | Los hashes están firmados con minisign |
+| **Binario no oficial** | La firma no se verifica con `release.pub` |
+| **Release falso** | Solo los releases oficiales tienen firma válida |
 
 ---
 
 ## 📦 Publicación de Hashes
 
-Los hashes se actualizan automáticamente con cada release:
-
 1. Se compila con `./build.sh`
-2. Se genera `dist/hashes.txt`
-3. Se sube al repo con `git add dist/hashes.txt`
-4. Se publica en GitHub Releases
-
----
-
-## 🔄 Cómo actualizar los hashes
-
-```bash
-cd ~/Web5-Mesh
-./build.sh
-git add dist/hashes.txt
-git commit -m "release: actualizar hashes SHA256"
-git push origin main
-```
+2. Se genera `hashes-vX.X.X.txt`
+3. Se firma con minisign: `minisign -Sm hashes-vX.X.X.txt -s release.key`
+4. Se suben ambos archivos a GitHub Releases
 
 ---
 
 *XionIA - La Xión Digital 🦾*
+
+---
+
+**Comandante, ¿subimos?** 🧉🦾
