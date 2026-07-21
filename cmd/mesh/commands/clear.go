@@ -1,45 +1,70 @@
 package commands
 
 import (
-	"fmt"
-	"os"
+"fmt"
+"os"
+"path/filepath"
 
-	"web5-mesh/src/crypto"
+"web5-mesh/src/crypto"
 )
 
 func init() {
-	Register("clear", cmdClear)
+Register("clear", cmdClear)
 }
 
 func cmdClear(args []string, id *crypto.Identity) string {
-	// Verificar si los archivos existen
-	_, errKey := os.Stat("node.key")
-	_, errACL := os.Stat("acl.json")
+// Requerir flag --force
+if len(args) == 0 || args[0] != "--force" {
+return "⚠️  Este comando borra tu identidad, ACL y todos los datos locales.\n   Usá 'clear --force' para confirmar."
+}
 
-	if errKey != nil && errACL != nil {
-		return "ℹ️ No hay archivos de identidad ni ACL para borrar."
-	}
+// Archivos a eliminar (en directorio actual y en ~/.xion/)
+files := []string{
+"node.key",
+"acl.json",
+"aliases.json",
+"alias.json",
+".shell_history",
+"config.json",
+}
 
-	// Requerir flag --force para confirmar
-	if len(args) == 0 || args[0] != "--force" {
-		return "⚠️  Este comando borra tu identidad y ACL.\n   Usá 'clear --force' para confirmar."
-	}
+var deleted []string
 
-	// Borrar node.key (identidad)
-	if errKey == nil {
-		err := os.Remove("node.key")
-		if err != nil {
-			return fmt.Sprintf("❌ Error borrando node.key: %v", err)
-		}
-	}
+// 1. Eliminar archivos en el directorio actual
+for _, f := range files {
+if _, err := os.Stat(f); err == nil {
+if err := os.Remove(f); err == nil {
+deleted = append(deleted, f)
+}
+}
+}
 
-	// Borrar acl.json (lista de confianza)
-	if errACL == nil {
-		err := os.Remove("acl.json")
-		if err != nil {
-			return fmt.Sprintf("❌ Error borrando acl.json: %v", err)
-		}
-	}
+// 2. Eliminar archivos en ~/.xion/
+home, err := os.UserHomeDir()
+if err == nil {
+xionDir := filepath.Join(home, ".xion")
+for _, f := range files {
+path := filepath.Join(xionDir, f)
+if _, err := os.Stat(path); err == nil {
+if err := os.Remove(path); err == nil {
+deleted = append(deleted, "~/.xion/"+f)
+}
+}
+}
+// Eliminar el directorio .xion si está vacío
+os.RemoveAll(xionDir)
+deleted = append(deleted, "~/.xion/ (directorio)")
+}
 
-	return "✅ Jaula de Faraday reiniciada:\n   ├── node.key eliminado (identidad borrada)\n   ├── acl.json eliminado (pares de confianza borrados)\n   └── Reiniciá la shell para generar nueva identidad."
+if len(deleted) == 0 {
+return "ℹ️ No hay archivos de identidad, ACL, alias o configuración para borrar."
+}
+
+result := "✅ Jaula de Faraday reiniciada:\n"
+for _, f := range deleted {
+result += fmt.Sprintf("   ├── %s eliminado\n", f)
+}
+result += "   └── Reiniciá la shell para generar nueva identidad."
+
+return result
 }
