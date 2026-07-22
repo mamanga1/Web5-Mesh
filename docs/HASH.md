@@ -11,7 +11,6 @@ Esto es clave para:
 
 ## 📋 Sistema de Verificación
 
-XionIA usa **minisign** para firmar los hashes de los binarios.
 
 - **Clave pública:** `release.pub` (disponible en el repo)
 - **Clave privada:** Solo en posesión del equipo de desarrollo (NUNCA subida)
@@ -49,7 +48,6 @@ Trusted comment: XionIA v1.0.1
 ## 📡 Verificación Remota (sin clonar el repo)
 
 ### Requisitos
-- **minisign instalado** ([descargar](https://github.com/jedisct1/minisign/releases))
 - **curl** o **wget**
 
 ### 1. Descargar los archivos necesarios
@@ -67,7 +65,6 @@ curl -LO https://github.com/mamanga1/Web5-Mesh/releases/download/v1.0.1/hashes-v
 
 ```bash
 PUBKEY=$(grep -v '^untrusted comment:' release.pub | tr -d ' ')
-minisign -Vm hashes-v1.0.1.txt -P "$PUBKEY"
 ```
 
 **Salida esperada:**
@@ -128,7 +125,6 @@ fi
 | Qué protege | Cómo |
 |-------------|------|
 | **Faro modificado** | El hash no coincide con el oficial |
-| **Ataque MITM** | Los hashes están firmados con minisign |
 | **Binario no oficial** | La firma no se verifica con `release.pub` |
 | **Release falso** | Solo los releases oficiales tienen firma válida |
 
@@ -138,7 +134,6 @@ fi
 
 1. Se compila con `./build.sh`
 2. Se genera `hashes-vX.X.X.txt`
-3. Se firma con minisign: `minisign -Sm hashes-vX.X.X.txt -s release.key`
 4. Se suben ambos archivos a GitHub Releases
 
 ---
