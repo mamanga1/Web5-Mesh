@@ -179,7 +179,7 @@ func connectToFaroShell() error {
 		}
 		globalConnWS = wsConn
 		globalUseWS = true
-		fmt.Printf("✅ Conectado al faro por WebSocket: %s\n", globalFaroAddr)
+		// conectado
 		return nil
 	}
 
@@ -193,7 +193,7 @@ func connectToFaroShell() error {
 	}
 	globalConn = conn
 	globalUseWS = false
-	fmt.Printf("✅ Conectado al faro por UDP: %s\n", globalFaroAddr)
+	// conectado
 	return nil
 }
 
