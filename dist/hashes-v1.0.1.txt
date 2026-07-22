@@ -1,7 +1,7 @@
-# XionIA Kernel
-# Generado: 2026-07-22T22:47:12Z
+# XionIA Kernel v1.0.1
+# Generado: 2026-07-22T23:13:07Z
 # Host: node-379-core
 # Arquitectura: x86_64
 
-235b534e70eec80ed5e43c3dc8308d95a62a98a88b2afc5df09fea26033ce3a1  mesh
 8fdc15f354d976dfddb158120adf5ab525cd0872418bc1fd12d9633a47079052  faro
+235b534e70eec80ed5e43c3dc8308d95a62a98a88b2afc5df09fea26033ce3a1  mesh
