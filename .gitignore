@@ -29,3 +29,7 @@ alias.json
 *.tar.gz
 dist/
 release.key
+aliases.json
+audit_dump.sh
+audit_dump.txt
+release.pub
