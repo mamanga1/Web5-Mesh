@@ -59,7 +59,6 @@ Listo. Ya estás dentro de la Jaula.
 - [TECHNICAL](docs/TECHNICAL.md) - Arquitectura y detalles técnicos
 - [COMMANDS](docs/COMMANDS.md) - Referencia de comandos
 - [FAROS](docs/FAROS.md) - Configuración de Faros
-- [HASH](docs/HASH.md) - Verificación de integridad de binarios
 - [WHITEPAPER](docs/WHITEPAPER.md) - Análisis completo
 - [KERNEL](docs/KERNEL.md) - XionIA: Un User-Space Kernel
 
