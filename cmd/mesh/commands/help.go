@@ -61,6 +61,14 @@ func cmdHelp(args []string, id *crypto.Identity) string {
 	help.WriteString("  COMUNICACIÓN E2E:\n")
 	help.WriteString("    chat <did|alias> <mensaje> - Enviar mensaje cifrado punto a punto\n\n")
 
+	// ============================================================
+	// CORREGIDO: /to con comillas cerradas correctamente
+	// ============================================================
+	help.WriteString("    /to <did|alias>       - Fijar conversación con un alias/DID\n")
+	help.WriteString("    /to on                - Grabar conversación\n")
+	help.WriteString("    /to off               - Dejar de grabar conversación\n")
+	help.WriteString("    /to off               - Salir del modo fijado\n\n")
+
 	help.WriteString("  DOCUMENTOS SOBERANOS:\n")
 	help.WriteString("    import <archivo>           - Meter archivo del host a la bóveda\n")
 	help.WriteString("    sign <archivo>             - Firmar criptográficamente (Ed25519)\n")
