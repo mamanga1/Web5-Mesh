@@ -30,7 +30,7 @@ xion@nodo:~$ whoami
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-### `acl list` ✅
+### `acl list` ✅ (tanto en acl como alias al agregar nuevo contacto debes salir con exit y volver a entrar a la shell faraday con ./mesh shell)
 
 Lista todos los nodos en tu lista de confianza (ACL).
 
@@ -79,7 +79,7 @@ xion@nodo:~$ acl clear
 
 ---
 
-## 🏷️ Alias Locales
+## 🏷️ Alias Locales (tanto en acl como alias al agregar nuevo contacto debes salir con exit y volver a entrar a la shell faraday con ./mesh shell)
 
 ### `alias add <nombre> <did>` ✅
 
