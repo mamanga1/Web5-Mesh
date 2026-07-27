@@ -1,14 +1,14 @@
 package main
 
 import (
-	crypto_rand "crypto/rand" // ← PARCHE: para nonce del handshake
-	"crypto/tls"              // ← PARCHE: para WSS fallback
+	crypto_rand "crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/http" // ← PARCHE: para headers del handshake WS
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -119,18 +119,18 @@ func completer(d prompt.Document) []prompt.Suggest {
 // ============================================================================
 
 var (
-	globalConn     *net.UDPConn
-	globalConnWS   *websocket.Conn
-	globalUseWS    bool
-	globalACLIndex map[[4]byte]peerKeys
-	globalID       *crypto.Identity
-	globalFaroAddr string
-	globalQuit     chan struct{}
-	msgChan        = make(chan string, 100)
-	cmdHistory     []string
+	globalConn      *net.UDPConn
+	globalConnWS    *websocket.Conn
+	globalUseWS     bool
+	globalACLIndex  map[[4]byte]peerKeys
+	globalID        *crypto.Identity
+	globalFaroAddr  string
+	globalQuit      chan struct{}
+	msgChan         = make(chan string, 100)
+	cmdHistory      []string
 	activeRecipient string
-	msgHistory     map[string][]string
-	lastPublicIP   string
+	msgHistory      map[string][]string
+	lastPublicIP    string
 )
 
 // ============================================================================
@@ -160,7 +160,6 @@ func isCommand(input string) bool {
 
 // ============================================================================
 // CONEXIÓN AL FARO — UDP default, TCP fallback, Gate DID
-// ← PARCHE: función reemplazada + 2 funciones nuevas
 // ============================================================================
 
 func connectToFaroShell() error {
@@ -181,7 +180,6 @@ func connectToFaroShell() error {
 	return fmt.Errorf("sin ruta al faro %s", globalFaroAddr)
 }
 
-// ← PARCHE: función nueva
 func connectUDPShell() error {
 	addr, err := net.ResolveUDPAddr("udp", globalFaroAddr)
 	if err != nil {
@@ -218,7 +216,6 @@ func connectUDPShell() error {
 	return nil
 }
 
-// ← PARCHE: función nueva
 func connectWSShell() error {
 	wsHost := globalFaroAddr
 	if !strings.Contains(wsHost, ":") {
@@ -272,8 +269,15 @@ func sendToFaroShell(msg string) error {
 	return err
 }
 
+// ============================================================================
+// FIX: nil check anti-panic
+// ============================================================================
+
 func readFromFaroShell() (string, error) {
 	if globalUseWS {
+		if globalConnWS == nil {
+			return "", fmt.Errorf("sin conexión WS")
+		}
 		_, message, err := globalConnWS.ReadMessage()
 		if err != nil {
 			return "", err
@@ -281,6 +285,9 @@ func readFromFaroShell() (string, error) {
 		return string(message), nil
 	}
 
+	if globalConn == nil {
+		return "", fmt.Errorf("sin conexión UDP")
+	}
 	buf := make([]byte, 65536)
 	globalConn.SetReadDeadline(time.Now().Add(15 * time.Second))
 	n, _, err := globalConn.ReadFromUDP(buf)
@@ -291,10 +298,19 @@ func readFromFaroShell() (string, error) {
 }
 
 // ============================================================================
-// LISTENER + ROAMING
+// LISTENER + ROAMING — FIX: recover anti-panic
 // ============================================================================
 
 func startNetworkListener() {
+	// Red de seguridad: si algo panea, no mata la shell
+	defer func() {
+		if r := recover(); r != nil {
+			fmt.Printf("\n⚠️ Listener recuperado: %v — reconectando...\n", r)
+			time.Sleep(2 * time.Second)
+			go startNetworkListener()
+		}
+	}()
+
 	if !globalUseWS && globalConn == nil {
 		return
 	}
