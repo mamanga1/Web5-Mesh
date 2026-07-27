@@ -1,12 +1,14 @@
 package main
 
 import (
-	"crypto/tls"
+	crypto_rand "crypto/rand" // ← PARCHE: para nonce del handshake
+	"crypto/tls"              // ← PARCHE: para WSS fallback
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/http" // ← PARCHE: para headers del handshake WS
 	"os"
 	"os/exec"
 	"strings"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/c-bata/go-prompt"
 	"github.com/gorilla/websocket"
+	"github.com/mr-tron/base58"
 	"web5-mesh/cmd/mesh/commands"
 	"web5-mesh/src/crypto"
 )
@@ -37,7 +40,7 @@ func restoreTerminal() {
 }
 
 // ============================================================================
-// COMPLETER - Autocompletado
+// COMPLETER
 // ============================================================================
 
 func completer(d prompt.Document) []prompt.Suggest {
@@ -116,18 +119,18 @@ func completer(d prompt.Document) []prompt.Suggest {
 // ============================================================================
 
 var (
-	globalConn      *net.UDPConn
-	globalConnWS    *websocket.Conn
-	globalUseWS     bool
-	globalACLIndex  map[[4]byte]peerKeys
-	globalID        *crypto.Identity
-	globalFaroAddr  string
-	globalQuit      chan struct{}
-	msgChan         = make(chan string, 100)
-	cmdHistory      []string
+	globalConn     *net.UDPConn
+	globalConnWS   *websocket.Conn
+	globalUseWS    bool
+	globalACLIndex map[[4]byte]peerKeys
+	globalID       *crypto.Identity
+	globalFaroAddr string
+	globalQuit     chan struct{}
+	msgChan        = make(chan string, 100)
+	cmdHistory     []string
 	activeRecipient string
-	msgHistory      map[string][]string
-	lastPublicIP    string // Para roaming
+	msgHistory     map[string][]string
+	lastPublicIP   string
 )
 
 // ============================================================================
@@ -141,7 +144,6 @@ func isCommand(input string) bool {
 		"mkdir", "rm", "pwd", "touch", "edit", "mv", "cp", "rmdir",
 		"chat", "ia", "browse", "host", "sync", "proxy",
 	}
-
 	words := strings.Fields(input)
 	if len(words) == 0 {
 		return false
@@ -157,7 +159,8 @@ func isCommand(input string) bool {
 }
 
 // ============================================================================
-// CONEXIÓN AL FARO
+// CONEXIÓN AL FARO — UDP default, TCP fallback, Gate DID
+// ← PARCHE: función reemplazada + 2 funciones nuevas
 // ============================================================================
 
 func connectToFaroShell() error {
@@ -165,35 +168,93 @@ func connectToFaroShell() error {
 		return fmt.Errorf("faro no configurado")
 	}
 
-	if strings.Contains(globalFaroAddr, ":443") || strings.Contains(globalFaroAddr, ":8443") {
-		wsURL := fmt.Sprintf("wss://%s/ws", globalFaroAddr)
-		dialer := websocket.Dialer{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true,
-			},
-			HandshakeTimeout: 5 * time.Second,
-		}
-		wsConn, _, err := dialer.Dial(wsURL, nil)
-		if err != nil {
-			return fmt.Errorf("error conectando WebSocket: %v", err)
-		}
-		globalConnWS = wsConn
-		globalUseWS = true
-		// conectado
+	// 1. UDP primero (default)
+	if err := connectUDPShell(); err == nil {
 		return nil
 	}
 
+	// 2. WS fallback
+	if err := connectWSShell(); err == nil {
+		return nil
+	}
+
+	return fmt.Errorf("sin ruta al faro %s", globalFaroAddr)
+}
+
+// ← PARCHE: función nueva
+func connectUDPShell() error {
 	addr, err := net.ResolveUDPAddr("udp", globalFaroAddr)
 	if err != nil {
-		return fmt.Errorf("error resolviendo faro UDP: %v", err)
+		return fmt.Errorf("resolviendo UDP: %v", err)
 	}
 	conn, err := net.DialUDP("udp", nil, addr)
 	if err != nil {
-		return fmt.Errorf("error conectando UDP: %v", err)
+		return fmt.Errorf("conectando UDP: %v", err)
 	}
+
+	// Handshake DID
+	hs, err := crypto.CreateHandshake(globalID)
+	if err != nil {
+		conn.Close()
+		return err
+	}
+	conn.Write(hs)
+
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	ack := make([]byte, 1024)
+	n, err := conn.Read(ack)
+	if err != nil {
+		conn.Close()
+		return fmt.Errorf("timeout handshake UDP")
+	}
+	if !strings.Contains(string(ack[:n]), `"ack":"ok"`) {
+		conn.Close()
+		return fmt.Errorf("handshake UDP rechazado")
+	}
+	conn.SetReadDeadline(time.Time{})
+
 	globalConn = conn
 	globalUseWS = false
-	// conectado
+	return nil
+}
+
+// ← PARCHE: función nueva
+func connectWSShell() error {
+	wsHost := globalFaroAddr
+	if !strings.Contains(wsHost, ":") {
+		wsHost += ":443"
+	}
+	if strings.HasSuffix(wsHost, ":54321") {
+		wsHost = strings.TrimSuffix(wsHost, ":54321") + ":443"
+	}
+
+	// Handshake DID en headers
+	nonce := make([]byte, 32)
+	crypto_rand.Read(nonce)
+	ts := time.Now().Unix()
+	nonceB64 := base64.StdEncoding.EncodeToString(nonce)
+	msg := fmt.Sprintf("%s|%d|%s", globalID.DID, ts, nonceB64)
+	sig := globalID.SignMessage([]byte(msg))
+
+	headers := http.Header{}
+	headers.Set("X-Xionia-DID", globalID.DID)
+	headers.Set("X-Xionia-Pub", base58.Encode(globalID.PubKeyEd))
+	headers.Set("X-Xionia-TS", fmt.Sprintf("%d", ts))
+	headers.Set("X-Xionia-Nonce", nonceB64)
+	headers.Set("X-Xionia-Sig", base64.StdEncoding.EncodeToString(sig))
+
+	wsURL := fmt.Sprintf("wss://%s/ws", wsHost)
+	dialer := websocket.Dialer{
+		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true},
+		HandshakeTimeout: 5 * time.Second,
+	}
+	wsConn, _, err := dialer.Dial(wsURL, headers)
+	if err != nil {
+		return fmt.Errorf("conectando WS: %v", err)
+	}
+
+	globalConnWS = wsConn
+	globalUseWS = true
 	return nil
 }
 
@@ -245,7 +306,6 @@ func startNetworkListener() {
 		default:
 			raw, err := readFromFaroShell()
 			if err != nil {
-				// Socket roto (cambio WiFi→datos): reconectar
 				if !globalUseWS && globalConn != nil {
 					globalConn.Close()
 					globalConn = nil
@@ -264,7 +324,7 @@ func startNetworkListener() {
 			raw = stripPadding(raw)
 			raw = extractPayload(raw)
 
-			// === ACK_IP: Roaming real (IP pública del faro) ===
+			// === ACK_IP: Roaming ===
 			if strings.HasPrefix(raw, "ACK_IP ") {
 				parts := strings.SplitN(raw, " ", 2)
 				if len(parts) == 2 {
@@ -447,23 +507,27 @@ func runInteractiveShell() {
 	globalACLIndex, _ = buildACLIndex(globalID)
 
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println("  XION KERNEL v1.0.0 | Modo Seguro: ON")
-	fmt.Println("  🆔 TU IDENTIDAD:")
-	fmt.Println("  DID:        " + globalID.DID)
+	fmt.Println(" XION KERNEL v1.0.0 | Modo Seguro: ON")
+	fmt.Println(" 🆔 TU IDENTIDAD:")
+	fmt.Println(" DID: " + globalID.DID)
 
 	pubEdHex := hex.EncodeToString(globalID.PubKeyEd)
 	pubXHex := hex.EncodeToString(globalID.PubKeyX[:])
-	fmt.Println("  PubKey Ed:  " + pubEdHex)
-	fmt.Println("  PubKey X:   " + pubXHex)
+	fmt.Println(" PubKey Ed: " + pubEdHex)
+	fmt.Println(" PubKey X:  " + pubXHex)
 	fmt.Println()
-	fmt.Println("  📋 Para que otro nodo te agregue, decile que ejecute:")
-	fmt.Printf("  acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
-	fmt.Printf("  alias add <nick> %s\n", globalID.DID)
+	fmt.Println(" 📋 Para que otro nodo te agregue, decile que ejecute:")
+	fmt.Printf("   acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
+	fmt.Printf("   alias add  %s\n", globalID.DID)
 	fmt.Println()
 	if globalFaroAddr != "" {
-		fmt.Printf("  📡 Faro activo: %s\n", globalFaroAddr)
+		if globalUseWS {
+			fmt.Printf(" 📡 Faro activo: %s (WSS fallback)\n", globalFaroAddr)
+		} else {
+			fmt.Printf(" 📡 Faro activo: %s (UDP default)\n", globalFaroAddr)
+		}
 	} else {
-		fmt.Println("  📡 Faro: NO CONFIGURADO")
+		fmt.Println(" 📡 Faro: NO CONFIGURADO")
 	}
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n\n", len(globalACLIndex))
@@ -476,7 +540,7 @@ func runInteractiveShell() {
 
 	go func() {
 		for msg := range msgChan {
-			fmt.Print("\r\033[K")
+			fmt.Print("\r\x1b[K")
 			fmt.Println(msg)
 			fmt.Print("xion@nodo:~$ ")
 		}
@@ -511,7 +575,7 @@ func runInteractiveShell() {
 				target := strings.TrimSpace(parts[1])
 				if target == "off" {
 					activeRecipient = ""
-					fmt.Println("✅ Modo normal. Usá 'chat <alias> <msg>' o 'group send <alias> <msg>'.")
+					fmt.Println("✅ Modo normal. Usá 'chat <alias>' o 'group send <alias>'.")
 				} else if strings.HasPrefix(target, "group:") {
 					alias := strings.TrimPrefix(target, "group:")
 					activeRecipient = "group:" + alias
@@ -547,7 +611,7 @@ func runInteractiveShell() {
 					delete(msgHistory, target)
 					fmt.Printf("📡 Modo chat con '%s' (historial desactivado).\n", target)
 				} else {
-					fmt.Printf("⚠️ Uso: /to <alias> [on|off]  o  /to off\n")
+					fmt.Printf("⚠️ Uso: /to <alias> [on|off] o /to off\n")
 				}
 			}
 			continue

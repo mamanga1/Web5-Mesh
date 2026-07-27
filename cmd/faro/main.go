@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json" // ← PARCHES: agregado para Gate DID
 	"fmt"
 	"io"
 	"log"
@@ -12,8 +14,10 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
+	"web5-mesh/src/crypto" // ← PARCHE: agregado para Gate DID
 )
 
 var (
@@ -24,6 +28,9 @@ var (
 	wsRegistry   = make(map[string]*websocket.Conn)
 	wsLastClient = make(map[string]*websocket.Conn)
 	wsMu         sync.RWMutex
+
+	// ← PARCHE: Gate DID
+	faroGate = crypto.NewGate(500, 2*time.Hour)
 )
 
 var upgrader = websocket.Upgrader{
@@ -32,7 +39,6 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// Variables inyectadas en build
 var (
 	buildCommit  string
 	buildTime    string
@@ -50,16 +56,42 @@ func maskAddr(addr *net.UDPAddr) string {
 	return ip.String()[:8] + "..."
 }
 
-func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPAddr) {
-	msg := strings.TrimSpace(string(buf[:n]))
+// ← PARCHE: detectar handshake DID
+func isHandshake(data []byte) bool {
+	return bytes.Contains(data, []byte(`"did"`)) &&
+		bytes.Contains(data, []byte(`"sig"`)) &&
+		bytes.Contains(data, []byte(`"nonce"`))
+}
 
-	// === DETECTAR JSON PRIMERO ===
+func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPAddr) {
+	data := buf[:n]
+
+	// ← PARCHE: Gate DID — handshake o IP autorizada
+	if isHandshake(data) {
+		did, err := faroGate.VerifyHandshake(data, remoteAddr.String())
+		if err != nil {
+			return // zero logs
+		}
+		ack := fmt.Sprintf(`{"ack":"ok","did":"%s","ts":%d,"nodes":%d}`,
+			did, time.Now().Unix(), faroGate.Count())
+		conn.WriteToUDP([]byte(ack), remoteAddr)
+		fmt.Printf("[FARO-UDP] 🔑 Gate: %s autorizado desde %s\n", did[:20]+"...", maskAddr(remoteAddr))
+		return
+	}
+	if !faroGate.IsAllowed(remoteAddr.String()) {
+		return // zero logs
+	}
+	// ← FIN PARCHE
+
+	msg := strings.TrimSpace(string(data))
+
+	// === JSON ===
 	if strings.HasPrefix(msg, "{") {
 		handleJSONCommand(conn, msg, remoteAddr)
 		return
 	}
 
-	// === FORMATO TEXTO PLANO ===
+	// === TEXTO PLANO ===
 	parts := strings.SplitN(msg, " ", 4)
 	if len(parts) < 2 {
 		return
@@ -75,8 +107,7 @@ func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPA
 			registry[did] = remoteAddr
 			mu.Unlock()
 			fmt.Printf("[FARO-UDP] 📥 ANNOUNCE: %s desde %s\n", did, maskAddr(remoteAddr))
-			
-			// === ACK_IP: Decirle al nodo su IP pública real ===
+
 			ack := fmt.Sprintf("ACK_IP %s", remoteAddr.IP.String())
 			conn.WriteToUDP([]byte(ack), remoteAddr)
 		}
@@ -90,9 +121,7 @@ func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPA
 			mu.Lock()
 			lastClient[senderDID] = remoteAddr
 			mu.Unlock()
-			fmt.Printf("[FARO-UDP] 📥 RELAY: guardado lastClient[%s] = %s\n", senderDID, maskAddr(remoteAddr))
 
-			// === ACK_IP: Notificar al nodo su IP pública (por si cambió) ===
 			ack := fmt.Sprintf("ACK_IP %s", remoteAddr.IP.String())
 			conn.WriteToUDP([]byte(ack), remoteAddr)
 
@@ -101,14 +130,10 @@ func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPA
 			mu.RUnlock()
 
 			if exists {
-				fmt.Printf("[FARO-UDP] 📤 RELAY: reenviando a %s (%s)\n", targetDID, maskAddr(target))
 				conn.WriteToUDP([]byte(payload), target)
-
 				ackMsg := fmt.Sprintf("ACK %s %s", senderDID, targetDID)
 				conn.WriteToUDP([]byte(ackMsg), remoteAddr)
-				fmt.Printf("[FARO-UDP] ✅ ACK enviado a %s\n", senderDID)
 			} else {
-				fmt.Printf("[FARO-UDP] ❌ RELAY: target %s NO ENCONTRADO\n", targetDID)
 				errorMsg := fmt.Sprintf("ERROR %s: target not found", targetDID)
 				conn.WriteToUDP([]byte(errorMsg), remoteAddr)
 			}
@@ -118,17 +143,13 @@ func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPA
 		if len(parts) >= 3 {
 			targetDID := parts[1]
 			payload := parts[2]
-			fmt.Printf("[FARO-UDP] 📥 RESPONSE: recibido para %s\n", targetDID)
 
 			mu.RLock()
 			client, exists := lastClient[targetDID]
 			mu.RUnlock()
 
 			if exists {
-				fmt.Printf("[FARO-UDP] 📤 RESPONSE: reenviando a %s\n", maskAddr(client))
 				conn.WriteToUDP([]byte(payload), client)
-			} else {
-				fmt.Printf("[FARO-UDP] ❌ RESPONSE: lastClient NO ENCONTRADO para %s\n", targetDID)
 			}
 		}
 
@@ -151,7 +172,6 @@ func handleUDPMessage(conn *net.UDPConn, buf []byte, n int, remoteAddr *net.UDPA
 	}
 }
 
-// === NUEVA FUNCIÓN JSON ===
 func handleJSONCommand(conn *net.UDPConn, msg string, addr *net.UDPAddr) {
 	if strings.Contains(msg, `"cmd":"VERIFY_HASH"`) || strings.Contains(msg, `"cmd": "VERIFY_HASH"`) {
 		handleVerifyHash(conn, addr)
@@ -195,19 +215,36 @@ func handleVerifyHash(conn *net.UDPConn, addr *net.UDPAddr) {
 }
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	// ← PARCHE: Gate DID en headers HTTP
+	hs := crypto.Handshake{
+		DID:   r.Header.Get("X-Xionia-DID"),
+		Pub:   r.Header.Get("X-Xionia-Pub"),
+		Nonce: r.Header.Get("X-Xionia-Nonce"),
+		Sig:   r.Header.Get("X-Xionia-Sig"),
+	}
+	fmt.Sscanf(r.Header.Get("X-Xionia-TS"), "%d", &hs.TS)
+	if hs.DID == "" || hs.Sig == "" {
+		http.Error(w, "", 403)
+		return
+	}
+	hsJSON, _ := json.Marshal(hs)
+	gateDID, err := faroGate.VerifyHandshake(hsJSON, r.RemoteAddr)
+	if err != nil {
+		http.Error(w, "", 403)
+		return
+	}
+	fmt.Printf("[FARO-WS] 🔑 Gate: %s autorizado desde %s\n", gateDID[:20]+"...", r.RemoteAddr)
+	// ← FIN PARCHE
+
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("[FARO-WS] Error upgrade: %v", err)
 		return
 	}
 	defer conn.Close()
 
-	fmt.Printf("[FARO-WS] 📡 Nueva conexión WebSocket desde %s\n", r.RemoteAddr)
-
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			fmt.Printf("[FARO-WS] ❌ Conexión cerrada: %v\n", err)
 			break
 		}
 
@@ -238,19 +275,16 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				wsMu.Lock()
 				wsLastClient[senderDID] = conn
 				wsMu.Unlock()
-				fmt.Printf("[FARO-WS] 📥 RELAY: guardado lastClient[%s]\n", senderDID)
 
 				wsMu.RLock()
 				target, exists := wsRegistry[targetDID]
 				wsMu.RUnlock()
 
 				if exists {
-					fmt.Printf("[FARO-WS] 📤 RELAY: reenviando a %s\n", targetDID)
 					target.WriteMessage(websocket.TextMessage, []byte(payload))
 					ackMsg := fmt.Sprintf("ACK %s %s", senderDID, targetDID)
 					conn.WriteMessage(websocket.TextMessage, []byte(ackMsg))
 				} else {
-					fmt.Printf("[FARO-WS] ❌ RELAY: target %s NO ENCONTRADO\n", targetDID)
 					errorMsg := fmt.Sprintf("ERROR %s: target not found", targetDID)
 					conn.WriteMessage(websocket.TextMessage, []byte(errorMsg))
 				}
@@ -260,17 +294,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if len(parts) >= 3 {
 				targetDID := parts[1]
 				payload := parts[2]
-				fmt.Printf("[FARO-WS] 📥 RESPONSE: recibido para %s\n", targetDID)
 
 				wsMu.RLock()
 				client, exists := wsLastClient[targetDID]
 				wsMu.RUnlock()
 
 				if exists {
-					fmt.Printf("[FARO-WS] 📤 RESPONSE: reenviando\n")
 					client.WriteMessage(websocket.TextMessage, []byte(payload))
-				} else {
-					fmt.Printf("[FARO-WS] ❌ RESPONSE: lastClient NO ENCONTRADO para %s\n", targetDID)
 				}
 			}
 		}
@@ -278,7 +308,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 }
 
 func startUDPServer() {
-	port := "54321"
+	port := "443" // ← PARCHE: era "54321", ahora 443 default
 	addr, _ := net.ResolveUDPAddr("udp", "0.0.0.0:"+port)
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
@@ -286,7 +316,7 @@ func startUDPServer() {
 	}
 	defer conn.Close()
 
-	fmt.Printf("🛡️ [FARO-UDP] Relay Ciego en 0.0.0.0:%s\n", port)
+	fmt.Printf("🛡️ [FARO-UDP] Relay Ciego en 0.0.0.0:%s (Gate DID activo)\n", port)
 
 	buf := make([]byte, 4096)
 	for {
@@ -304,7 +334,7 @@ func startWebSocketServer() {
 	cert, err := tls.LoadX509KeyPair("cert.pem", "key.pem")
 	if err != nil {
 		log.Printf("[FARO-WS] ❌ Error cargando certificados: %v", err)
-		log.Printf("[FARO-WS] Generá los certificados con: openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj \"/CN=faro.local\"")
+		log.Printf("[FARO-WS] Generá con: openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -nodes -subj \"/CN=faro.local\"")
 		return
 	}
 
@@ -312,14 +342,17 @@ func startWebSocketServer() {
 		Certificates: []tls.Certificate{cert},
 	}
 
-	http.HandleFunc("/ws", handleWebSocket)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/ws", handleWebSocket)
 
 	server := &http.Server{
 		Addr:      ":" + port,
+		Handler:   mux,
 		TLSConfig: tlsConfig,
+		ErrorLog:  log.New(io.Discard, "", 0), // ← PARCHE: zero logs de bots TLS
 	}
 
-	fmt.Printf("🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:%s\n", port)
+	fmt.Printf("🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:%s (Gate DID activo)\n", port)
 
 	if err := server.ListenAndServeTLS("", ""); err != nil {
 		log.Printf("[FARO-WS] ❌ Error: %v", err)
@@ -328,6 +361,7 @@ func startWebSocketServer() {
 
 func main() {
 	fmt.Println("🚀 Iniciando Faro Dual (UDP + WebSocket)")
+	fmt.Println("   Gate DID: solo nodos con did:maia válido")
 
 	go startUDPServer()
 	startWebSocketServer()
