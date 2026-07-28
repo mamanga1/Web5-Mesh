@@ -159,7 +159,7 @@ func isCommand(input string) bool {
 }
 
 // ============================================================================
-// CONEXIÓN AL FARO — UDP default, TCP fallback, Gate DID
+// CONEXIÓN AL FARO — UDP 54321 principal, UDP 443 fallback, WSS último recurso
 // ============================================================================
 
 func connectToFaroShell() error {
@@ -167,12 +167,23 @@ func connectToFaroShell() error {
 		return fmt.Errorf("faro no configurado")
 	}
 
-	// 1. UDP primero (default)
-	if err := connectUDPShell(); err == nil {
+	// Extraer host sin puerto
+	host := globalFaroAddr
+	if strings.Contains(host, ":") {
+		host = strings.Split(host, ":")[0]
+	}
+
+	// 1. UDP 54321 — PRINCIPAL
+	if err := connectUDPShell(host + ":54321"); err == nil {
 		return nil
 	}
 
-	// 2. WS fallback
+	// 2. UDP 443 — FALLBACK UDP
+	if err := connectUDPShell(host + ":443"); err == nil {
+		return nil
+	}
+
+	// 3. WSS 443 — ÚLTIMO RECURSO
 	if err := connectWSShell(); err == nil {
 		return nil
 	}
@@ -180,12 +191,12 @@ func connectToFaroShell() error {
 	return fmt.Errorf("sin ruta al faro %s", globalFaroAddr)
 }
 
-func connectUDPShell() error {
-	addr, err := net.ResolveUDPAddr("udp", globalFaroAddr)
+func connectUDPShell(addr string) error {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return fmt.Errorf("resolviendo UDP: %v", err)
 	}
-	conn, err := net.DialUDP("udp", nil, addr)
+	conn, err := net.DialUDP("udp", nil, udpAddr)
 	if err != nil {
 		return fmt.Errorf("conectando UDP: %v", err)
 	}
@@ -302,7 +313,6 @@ func readFromFaroShell() (string, error) {
 // ============================================================================
 
 func startNetworkListener() {
-	// Red de seguridad: si algo panea, no mata la shell
 	defer func() {
 		if r := recover(); r != nil {
 			fmt.Printf("\n⚠️ Listener recuperado: %v — reconectando...\n", r)
@@ -538,9 +548,9 @@ func runInteractiveShell() {
 	fmt.Println()
 	if globalFaroAddr != "" {
 		if globalUseWS {
-			fmt.Printf(" 📡 Faro activo: %s (WSS fallback)\n", globalFaroAddr)
+			fmt.Printf(" 📡 Faro activo: %s (WSS último recurso)\n", globalFaroAddr)
 		} else {
-			fmt.Printf(" 📡 Faro activo: %s (UDP default)\n", globalFaroAddr)
+			fmt.Printf(" 📡 Faro activo: %s (UDP)\n", globalFaroAddr)
 		}
 	} else {
 		fmt.Println(" 📡 Faro: NO CONFIGURADO")
