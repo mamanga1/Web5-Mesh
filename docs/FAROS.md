@@ -172,26 +172,6 @@ sudo systemctl start xionia-faro
 
 ---
 
-## Verificación de Faros
-
-Cualquier nodo puede verificar que un faro corre el binario esperado:
-
-```bash
-xion@nodo:~$ faro verify 190.220.45.26:54321
-🔍 Verificando faro 190.220.45.26:54321...
-   Hash: a3f2b8c9d1e4...
-   Tamaño: 12,458,392 bytes
-   Commit: 7a2f3b1
-   Versión: v1.0.0
-   Build: 2026-07-22T14:30:00Z
-✅ Faro verificado
-```
-
-El hash SHA-256 del binario permite detectar faros comprometidos o
-modificados.
-
----
-
 ## CGNAT y U2P
 
 > ⚠️ **Estado: Fase 2 — no implementado.** U2P/XTP no existe en el
