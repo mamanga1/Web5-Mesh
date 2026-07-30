@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync" // ← CAMBIO: para activityMu
 	"time"
 
 	"github.com/c-bata/go-prompt"
@@ -134,6 +135,30 @@ var (
 )
 
 // ============================================================================
+// ← CAMBIO: ACTIVIDAD (para watchdog de reconexión)
+// ============================================================================
+
+var (
+	activityMu   sync.Mutex
+	lastActivity time.Time
+)
+
+func touchActivity() {
+	activityMu.Lock()
+	lastActivity = time.Now()
+	activityMu.Unlock()
+}
+
+func staleSince() time.Duration {
+	activityMu.Lock()
+	defer activityMu.Unlock()
+	if lastActivity.IsZero() {
+		return 0
+	}
+	return time.Since(lastActivity)
+}
+
+// ============================================================================
 // isCommand
 // ============================================================================
 
@@ -167,23 +192,19 @@ func connectToFaroShell() error {
 		return fmt.Errorf("faro no configurado")
 	}
 
-	// Extraer host sin puerto
 	host := globalFaroAddr
 	if strings.Contains(host, ":") {
 		host = strings.Split(host, ":")[0]
 	}
 
-	// 1. UDP 54321 — PRINCIPAL
 	if err := connectUDPShell(host + ":54321"); err == nil {
 		return nil
 	}
 
-	// 2. UDP 443 — FALLBACK UDP
 	if err := connectUDPShell(host + ":443"); err == nil {
 		return nil
 	}
 
-	// 3. WSS 443 — ÚLTIMO RECURSO
 	if err := connectWSShell(); err == nil {
 		return nil
 	}
@@ -201,7 +222,6 @@ func connectUDPShell(addr string) error {
 		return fmt.Errorf("conectando UDP: %v", err)
 	}
 
-	// Handshake DID
 	hs, err := crypto.CreateHandshake(globalID)
 	if err != nil {
 		conn.Close()
@@ -236,7 +256,6 @@ func connectWSShell() error {
 		wsHost = strings.TrimSuffix(wsHost, ":54321") + ":443"
 	}
 
-	// Handshake DID en headers
 	nonce := make([]byte, 32)
 	crypto_rand.Read(nonce)
 	ts := time.Now().Unix()
@@ -346,6 +365,9 @@ func startNetworkListener() {
 				}
 				continue
 			}
+
+			// ← CAMBIO: cualquier paquete recibido prueba que la red funciona
+			touchActivity()
 
 			raw = stripPadding(raw)
 			raw = extractPayload(raw)
@@ -476,7 +498,7 @@ func startNetworkListener() {
 }
 
 // ============================================================================
-// ANNOUNCE LOOP
+// ANNOUNCE LOOP — ← CAMBIO: 10s (era 15s) + touchActivity
 // ============================================================================
 
 func startAnnounceLoop() {
@@ -488,7 +510,7 @@ func startAnnounceLoop() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(10 * time.Second) // ← CAMBIO: era 15s
 	defer ticker.Stop()
 	for {
 		select {
@@ -501,7 +523,46 @@ func startAnnounceLoop() {
 			ts := fmt.Sprintf("%d", time.Now().Unix())
 			sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
 			msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
-			_ = sendToFaroShell(addPadding(msg))
+			if err := sendToFaroShell(addPadding(msg)); err == nil {
+				touchActivity() // ← CAMBIO: alimentar watchdog
+			}
+		}
+	}
+}
+
+// ============================================================================
+// ← CAMBIO: WATCHDOG de reconexión (cada 10s, reconecta si >20s sin actividad)
+// ============================================================================
+
+func startWatchdog() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-globalQuit:
+			return
+		case <-ticker.C:
+			if stale := staleSince(); stale > 20*time.Second {
+				fmt.Printf("\n⚠️ [WATCHDOG] Sin actividad hace %v, reconectando...\n", stale)
+				if !globalUseWS && globalConn != nil {
+					globalConn.Close()
+					globalConn = nil
+				}
+				if globalUseWS && globalConnWS != nil {
+					globalConnWS.Close()
+					globalConnWS = nil
+				}
+				if err := connectToFaroShell(); err == nil {
+					ts := fmt.Sprintf("%d", time.Now().Unix())
+					sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
+					msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
+					sendToFaroShell(addPadding(msg))
+					touchActivity()
+					fmt.Println("✅ [WATCHDOG] Reconectado y ANNOUNCE enviado")
+				} else {
+					fmt.Printf("❌ [WATCHDOG] Reconexión falló: %v\n", err)
+				}
+			}
 		}
 	}
 }
@@ -563,6 +624,23 @@ func runInteractiveShell() {
 
 	go startNetworkListener()
 	go startAnnounceLoop()
+	go startWatchdog() // ← CAMBIO: watchdog de reconexión
+
+	// ← CAMBIO: retry de ANNOUNCE a los 3s (fix "hay que saludarse")
+	go func() {
+		select {
+		case <-globalQuit:
+			return
+		case <-time.After(3 * time.Second):
+			ts := fmt.Sprintf("%d", time.Now().Unix())
+			sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
+			msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
+			if err := sendToFaroShell(addPadding(msg)); err == nil {
+				touchActivity()
+				fmt.Println("📡 ANNOUNCE retry (3s) enviado")
+			}
+		}
+	}()
 
 	go func() {
 		for msg := range msgChan {
