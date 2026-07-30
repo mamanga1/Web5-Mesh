@@ -20,6 +20,7 @@ import (
 	"github.com/mr-tron/base58"
 	"web5-mesh/cmd/mesh/commands"
 	"web5-mesh/src/crypto"
+	"web5-mesh/src/xtp" // ← XTP: transporte directo (Fase 2)
 )
 
 // ============================================================================
@@ -55,6 +56,7 @@ func completer(d prompt.Document) []prompt.Suggest {
 			{Text: "alias", Description: "Gestión de alias locales"},
 			{Text: "group", Description: "Gestión de grupos"},
 			{Text: "faro", Description: "Gestión de faro"},
+			{Text: "xtp", Description: "Transporte directo XTP (Noise IK)"}, // ← XTP
 			{Text: "help", Description: "Mostrar ayuda"},
 			{Text: "exit", Description: "Salir de la shell"},
 		}
@@ -94,16 +96,23 @@ func completer(d prompt.Document) []prompt.Suggest {
 				{Text: "info", Description: "Info de grupo"},
 			}
 		}
+	case "xtp": // ← XTP
+		if len(words) == 1 {
+			return []prompt.Suggest{
+				{Text: "status", Description: "Estado del transporte XTP"},
+			}
+		}
 	}
 
 	s := []prompt.Suggest{}
 	allCommands := []string{
-		"whoami", "acl", "alias", "group", "faro", "help", "exit",
+		"whoami", "acl", "alias", "group", "faro", "xtp", "help", "exit", // ← XTP: agregado "xtp"
 		"acl add", "acl import", "acl remove", "acl list", "acl clear",
 		"alias add", "alias remove", "alias list",
 		"group create", "group list", "group send", "group add", "group remove",
 		"group invite", "group kick", "group leave", "group delete", "group info",
 		"faro set", "faro reset",
+		"xtp status", // ← XTP
 	}
 
 	for _, cmd := range allCommands {
@@ -159,6 +168,35 @@ func staleSince() time.Duration {
 }
 
 // ============================================================================
+// ← XTP: TRANSPORT MANAGER (Fase 2 — conexión directa Noise IK)
+// ============================================================================
+
+var globalTM *xtp.TransportManager
+
+// faroSenderShell implementa xtp.FaroSender para la shell.
+// El TransportManager usa esto para enviar signaling al faro
+// (OPEN_SESSION, PUNCH, SESSION_ACK, etc.).
+type faroSenderShell struct{}
+
+func (f faroSenderShell) SendToFaro(msg string) error {
+	return sendToFaroShell(msg)
+}
+
+// buildXTPACLIndex convierte el ACL index de la shell (peerKeys)
+// al formato que espera el TransportManager (xtp.PeerKeys).
+func buildXTPACLIndex() map[[4]byte]xtp.PeerKeys {
+	idx := make(map[[4]byte]xtp.PeerKeys, len(globalACLIndex))
+	for kid, pk := range globalACLIndex {
+		idx[kid] = xtp.PeerKeys{
+			DID:       pk.DID,
+			PubKeyEd:  pk.PubKeyEd,
+			SharedKey: pk.SharedKey,
+		}
+	}
+	return idx
+}
+
+// ============================================================================
 // isCommand
 // ============================================================================
 
@@ -168,6 +206,7 @@ func isCommand(input string) bool {
 		"clear", "import", "export", "sign", "verify", "ls", "cat",
 		"mkdir", "rm", "pwd", "touch", "edit", "mv", "cp", "rmdir",
 		"chat", "ia", "browse", "host", "sync", "proxy",
+		"xtp", // ← XTP
 	}
 	words := strings.Fields(input)
 	if len(words) == 0 {
@@ -371,6 +410,13 @@ func startNetworkListener() {
 
 			raw = stripPadding(raw)
 			raw = extractPayload(raw)
+
+			// ← XTP: Rutear al TransportManager (signaling o relay).
+			// Si el manager lo procesa (SESSION_INFO, SESSION_INCOMING,
+			// PUNCH_NOW, o un RELAY entrante), no seguimos procesando acá.
+			if globalTM != nil && globalTM.HandleIncoming(raw) {
+				continue
+			}
 
 			// === ACK_IP: Roaming ===
 			if strings.HasPrefix(raw, "ACK_IP ") {
@@ -593,6 +639,36 @@ func runInteractiveShell() {
 
 	globalACLIndex, _ = buildACLIndex(globalID)
 
+	// ← XTP: Crear TransportManager (Fase 2 — conexión directa Noise IK).
+	// Se crea DESPUÉS de buildACLIndex (necesita el ACL) y ANTES de
+	// startNetworkListener (el listener rutea mensajes al manager).
+	globalTM = xtp.NewTransportManager(
+		globalID,
+		faroSenderShell{},
+		buildXTPACLIndex(),
+		xtp.ManagerCallbacks{
+			OnMessage: func(peerDID, displayName, command string) {
+				msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, command)
+			},
+			OnDirectSessionActive: func(peerDID string) {
+				msgChan <- fmt.Sprintf("🔐 [XTP] Conexión directa con %s (Noise IK, forward secrecy)", peerDID[:20]+"...")
+			},
+			OnDirectSessionLost: func(peerDID string) {
+				msgChan <- fmt.Sprintf("💀 [XTP] Sesión directa perdida con %s", peerDID[:20]+"...")
+			},
+			OnFallbackToRelay: func(peerDID string) {
+				msgChan <- fmt.Sprintf("🔄 [XTP] Usando relay con %s (hole punching falló)", peerDID[:20]+"...")
+			},
+			OnStateChange: func(from, to xtp.State, event xtp.Event) {
+				fmt.Printf("[XTP] FSM: %s → %s (%s)\n", from, to, event)
+			},
+			OnError: func(context string, err error) {
+				fmt.Printf("[XTP] ⚠️ Error en %s: %v\n", context, err)
+			},
+		},
+		xtp.DefaultManagerConfig(),
+	)
+
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println(" XION KERNEL v1.0.0 | Modo Seguro: ON")
 	fmt.Println(" 🆔 TU IDENTIDAD:")
@@ -616,6 +692,7 @@ func runInteractiveShell() {
 	} else {
 		fmt.Println(" 📡 Faro: NO CONFIGURADO")
 	}
+	fmt.Println(" 🔐 XTP: transporte directo Noise IK activo") // ← XTP
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n\n", len(globalACLIndex))
 
@@ -668,6 +745,59 @@ func runInteractiveShell() {
 
 		if len(cmdHistory) == 0 || cmdHistory[len(cmdHistory)-1] != input {
 			cmdHistory = append(cmdHistory, input)
+		}
+
+		// ============================================================
+		// ← XTP: COMANDO xtp status
+		// ============================================================
+		if input == "xtp" || input == "xtp status" {
+			if globalTM == nil {
+				fmt.Println("❌ TransportManager no inicializado")
+				continue
+			}
+			stats := globalTM.Stats()
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			fmt.Println(" 📊 XTP Transport Manager")
+			fmt.Printf("    Estado FSM: %s\n", stats.FSMState)
+			fmt.Printf("    Sesiones directas: %d\n", stats.DirectSessions)
+			fmt.Printf("    Relay activo: %v\n", !stats.RelayClosed)
+			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+			continue
+		}
+
+		// ============================================================
+		// ← XTP: COMANDO xtp <alias|DID> <mensaje>
+		// Envía por transporte directo (Noise IK) si hay sesión activa,
+		// o intenta establecerla. Si falla, cae a relay automáticamente.
+		// ============================================================
+		if strings.HasPrefix(input, "xtp ") {
+			parts := strings.SplitN(input, " ", 3)
+			if len(parts) == 3 {
+				target := parts[1]
+				msg := parts[2]
+
+				targetDID, _ := crypto.ResolveNode(target)
+				if targetDID == "" {
+					targetDID = target
+				}
+
+				if globalTM == nil {
+					fmt.Println("❌ TransportManager no inicializado")
+					continue
+				}
+
+				transport, err := globalTM.Send(targetDID, "CHAT:"+msg)
+				if err != nil {
+					fmt.Printf("❌ Error enviando por XTP: %v\n", err)
+				} else {
+					fmt.Printf("📤 Enviado por %s → %s\n", transport, targetDID[:20]+"...")
+				}
+			} else {
+				fmt.Println("Uso: xtp <alias|DID> <mensaje>")
+				fmt.Println("Ejemplo: xtp juan hola mundo")
+				fmt.Println("El transporte (directo Noise IK o relay) se elige automáticamente.")
+			}
+			continue
 		}
 
 		// ============================================================
@@ -751,6 +881,10 @@ func runInteractiveShell() {
 
 		if input == "exit" || input == "/exit" {
 			fmt.Println("\n👋 Saliendo de la consola asegurada...")
+			// ← XTP: Cerrar TransportManager (cierra sesiones directas y relay)
+			if globalTM != nil {
+				globalTM.Close()
+			}
 			close(globalQuit)
 			close(msgChan)
 			if globalUseWS && globalConnWS != nil {
