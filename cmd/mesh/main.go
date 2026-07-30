@@ -80,6 +80,7 @@ type InnerPayload struct {
 type peerKeys struct {
 	DID       string
 	PubKeyEd  []byte
+	PubKeyX   []byte // ← FIX: clave X25519 para Noise IK
 	SharedKey []byte
 }
 
@@ -115,7 +116,7 @@ func buildACLIndex(myID *crypto.Identity) (map[[4]byte]peerKeys, error) {
 			continue
 		}
 		kid := crypto.DeriveKeyID(pubX)
-		index[kid] = peerKeys{DID: did, PubKeyEd: pubEd, SharedKey: sharedKey}
+		index[kid] = peerKeys{DID: did, PubKeyEd: pubEd, PubKeyX: pubX, SharedKey: sharedKey} // ← FIX: PubKeyX
 	}
 	return index, nil
 }
