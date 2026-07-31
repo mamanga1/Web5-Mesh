@@ -172,7 +172,7 @@ func (dt *DirectTransport) OpenSession(peerDID string, peerPubX *[32]byte) error
 	dt.peerEndpoint = parts[2]
 	dt.mu.Unlock()
 
-	peerAddr, err := net.ResolveUDPAddr("udp", parts[2])
+	peerAddr, err := net.ResolveUDPAddr("udp4", parts[2])
 	if err != nil {
 		return fmt.Errorf("resolviendo endpoint del peer %s: %w", parts[2], err)
 	}
@@ -214,7 +214,7 @@ func (dt *DirectTransport) HandleIncomingSession(raw string) error {
 		return nil
 	}
 
-	senderAddr, err := net.ResolveUDPAddr("udp", senderEndpoint)
+	senderAddr, err := net.ResolveUDPAddr("udp4", senderEndpoint)
 	if err != nil {
 		return fmt.Errorf("resolviendo endpoint del sender %s: %w", senderEndpoint, err)
 	}
@@ -291,7 +291,7 @@ func (dt *DirectTransport) openPunchSocket() error {
 		return nil
 	}
 
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
+	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4zero, Port: 0})
 	if err != nil {
 		return err
 	}
@@ -365,6 +365,84 @@ func (dt *DirectTransport) punch(peerPubX *[32]byte) error {
 				}
 
 				return dt.noiseHandshake(peerPubX)
+			}
+		}
+	}
+}
+
+func (dt *DirectTransport) noiseHandshake(peerPubX *[32]byte) error {
+	dt.fsm.Send(EvStartNoise, map[string]interface{}{"peer": dt.peerDID})
+
+	dt.mu.Lock()
+	identity := dt.identity
+	dt.mu.Unlock()
+
+	if identity == nil {
+		dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID})
+		return fmt.Errorf("identidad no configurada")
+	}
+
+	isInitiator := true
+	dt.mu.Lock()
+	if dt.peerEndpoint == "" {
+		isInitiator = false
+	}
+	dt.mu.Unlock()
+
+	session, err := NewSession(isInitiator, identity, dt.peerDID, peerPubX)
+	if err != nil {
+		dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID, "err": err})
+		return fmt.Errorf("creando sesión Noise IK: %w", err)
+	}
+
+	dt.mu.Lock()
+	dt.session = session
+	dt.mu.Unlock()
+
+	if isInitiator {
+		msg, err := session.InitiatorMessage()
+		if err != nil {
+			dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID, "err": err})
+			return fmt.Errorf("generando mensaje de handshake: %w", err)
+		}
+
+		pkt := append([]byte{byte(PktNoise)}, msg...)
+
+		dt.mu.Lock()
+		conn := dt.conn
+		peerAddr := dt.peerAddr
+		dt.mu.Unlock()
+
+		if conn == nil || peerAddr == nil {
+			return fmt.Errorf("socket o dirección del peer no disponible")
+		}
+
+		if _, err := conn.WriteToUDP(pkt, peerAddr); err != nil {
+			dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID, "err": err})
+			return fmt.Errorf("enviando handshake Noise: %w", err)
+		}
+
+		fmt.Printf("[XTP] 📤 Noise IK msg 1 → %s\n", dt.peerDID[:20]+"...")
+	}
+
+	deadline := time.After(HandshakeTimeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-dt.quit:
+			return fmt.Errorf("transporte cerrado durante Noise handshake")
+		case <-deadline:
+			dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID})
+			if dt.cb.OnFallbackToRelay != nil {
+				dt.cb.OnFallbackToRelay(dt.peerDID)
+			}
+			return fmt.Errorf("Noise handshake timeout")
+		case <-ticker.C:
+			if session.IsActive() {
+				dt.onNoiseComplete()
+				return nil
 			}
 		}
 	}
@@ -498,88 +576,6 @@ func (dt *DirectTransport) handlePunchPacket(payload []byte, remoteAddr *net.UDP
 	}
 }
 
-func (dt *DirectTransport) noiseHandshake(peerPubX *[32]byte) error {
-	dt.fsm.Send(EvStartNoise, map[string]interface{}{"peer": dt.peerDID})
-
-	dt.mu.Lock()
-	identity := dt.identity
-	dt.mu.Unlock()
-
-	if identity == nil {
-		dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID})
-		return fmt.Errorf("identidad no configurada")
-	}
-
-	isInitiator := true
-	dt.mu.Lock()
-	if dt.peerEndpoint == "" {
-		isInitiator = false
-	}
-	dt.mu.Unlock()
-
-	session, err := NewSession(isInitiator, identity, dt.peerDID, peerPubX)
-	if err != nil {
-		dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID, "err": err})
-		return fmt.Errorf("creando sesión Noise IK: %w", err)
-	}
-
-	dt.mu.Lock()
-	dt.session = session
-	dt.mu.Unlock()
-
-	if isInitiator {
-		msg, err := session.InitiatorMessage()
-		if err != nil {
-			dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID, "err": err})
-			return fmt.Errorf("generando mensaje de handshake: %w", err)
-		}
-
-		pkt := append([]byte{byte(PktNoise)}, msg...)
-
-		dt.mu.Lock()
-		conn := dt.conn
-		peerAddr := dt.peerAddr
-		dt.mu.Unlock()
-
-		if conn == nil || peerAddr == nil {
-			return fmt.Errorf("socket o dirección del peer no disponible")
-		}
-
-		if _, err := conn.WriteToUDP(pkt, peerAddr); err != nil {
-			dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID, "err": err})
-			return fmt.Errorf("enviando handshake Noise: %w", err)
-		}
-
-		fmt.Printf("[XTP] 📤 Noise IK msg 1 → %s\n", dt.peerDID[:20]+"...")
-	}
-
-	deadline := time.After(HandshakeTimeout)
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-dt.quit:
-			return fmt.Errorf("transporte cerrado durante Noise handshake")
-		case <-deadline:
-			dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID})
-			if dt.cb.OnFallbackToRelay != nil {
-				dt.cb.OnFallbackToRelay(dt.peerDID)
-			}
-			return fmt.Errorf("Noise handshake timeout")
-		case <-ticker.C:
-			if session.IsActive() {
-				dt.onNoiseComplete()
-				return nil
-			}
-		}
-	}
-}
-
-// ============================================================================
-// FIX #4: handleNoisePacket ahora llama onNoiseComplete() cuando completed=true
-// ============================================================================
-
 func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 	dt.mu.Lock()
 	session := dt.session
@@ -621,7 +617,7 @@ func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 
 	if completed {
 		fmt.Printf("[XTP] ✅ Noise IK completo con %s\n", peerDID[:20]+"...")
-		dt.onNoiseComplete() // ← FIX #4: ACTIVAR la sesión (keepalive, callbacks, SESSION_ACK)
+		dt.onNoiseComplete()
 	}
 }
 
@@ -629,7 +625,7 @@ func (dt *DirectTransport) onNoiseComplete() {
 	dt.mu.Lock()
 	if dt.active {
 		dt.mu.Unlock()
-		return // Ya activa, no duplicar
+		return
 	}
 	dt.active = true
 	peerDID := dt.peerDID

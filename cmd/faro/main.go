@@ -28,7 +28,7 @@ import (
 )
 
 // ============================================================================
-// REGISTRY CON SHARDING (escalabilidad: reduce contención de mutex 16x)
+// REGISTRY CON SHARDING
 // ============================================================================
 
 const numShards = 16
@@ -36,7 +36,7 @@ const numShards = 16
 type registryEntry struct {
 	addr     *net.UDPAddr
 	lastSeen time.Time
-	endpoint string // "ip:port" público (para signaling)
+	endpoint string
 }
 
 type shard struct {
@@ -91,24 +91,20 @@ var (
 )
 
 // ============================================================================
-// SESIONES ACTIVAS (signaling)
+// SESIONES ACTIVAS
 // ============================================================================
-// Cuando dos nodos establecen una sesión directa, el faro lo registra acá.
-// Mientras la sesión está activa, el faro NO relayea entre esos dos nodos
-// (se hablan directo). Si la sesión se cierra o expira, el faro vuelve a
-// relayear (fallback).
 
 type sessionEntry struct {
 	didA     string
 	didB     string
 	created  time.Time
 	lastSeen time.Time
-	active   bool // true = sesión directa establecida, faro no relayea
+	active   bool
 }
 
 var (
 	sessionMu sync.RWMutex
-	sessions  = make(map[string]*sessionEntry) // clave: "didA|didB" (ordenado)
+	sessions  = make(map[string]*sessionEntry)
 )
 
 func sessionKey(didA, didB string) string {
@@ -119,7 +115,7 @@ func sessionKey(didA, didB string) string {
 }
 
 // ============================================================================
-// REFERENCIA GLOBAL A UDPConn (para cross-relay WSS→UDP)
+// REFERENCIA GLOBAL A UDPConn
 // ============================================================================
 
 var (
@@ -139,7 +135,7 @@ var (
 )
 
 // ============================================================================
-// RATE LIMITER (anti-flood: máximo 20 mensajes por 5s por IP)
+// RATE LIMITER
 // ============================================================================
 
 type rateLimiter struct {
@@ -154,7 +150,6 @@ func (rl *rateLimiter) Allow(key string) bool {
 	defer rl.mu.Unlock()
 	now := time.Now()
 	cutoff := now.Add(-5 * time.Second)
-	// Limpiar entradas viejas
 	recent := rl.hits[key][:0]
 	for _, t := range rl.hits[key] {
 		if t.After(cutoff) {
@@ -203,7 +198,11 @@ func maskAddr(addr *net.UDPAddr) string {
 	if ip4 := ip.To4(); ip4 != nil {
 		return fmt.Sprintf("%d.%d.*.*", ip4[0], ip4[1])
 	}
-	return ip.String()[:8] + "..."
+	s := ip.String()
+	if len(s) > 8 {
+		return s[:8] + "..."
+	}
+	return s + "..."
 }
 
 func maskRemoteAddr(addr string) string {
@@ -218,7 +217,10 @@ func maskRemoteAddr(addr string) string {
 	if ip4 := ip.To4(); ip4 != nil {
 		return fmt.Sprintf("%d.%d.*.*", ip4[0], ip4[1])
 	}
-	return host[:8] + "..."
+	if len(host) > 8 {
+		return host[:8] + "..."
+	}
+	return host + "..."
 }
 
 func stripPadding(data string) string {
@@ -255,13 +257,11 @@ func verifyAnnounceSig(did, ts, sig string) bool {
 // ============================================================================
 
 func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
-	// Rate limiting
 	if !limiter.Allow(remoteAddr.String()) {
 		atomic.AddInt64(&statsDropped, 1)
 		return
 	}
 
-	// Handshake del Gate DID
 	if isHandshake(data) {
 		did, err := faroGate.VerifyHandshake(data, remoteAddr.String())
 		if err != nil {
@@ -278,7 +278,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	// Verificar Gate
 	if !faroGate.IsAllowed(remoteAddr.String()) {
 		gateDIDsMu.RLock()
 		knownDID := gateDIDs[remoteAddr.String()]
@@ -305,9 +304,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 
 	switch cmd {
 
-	// ====================================================================
-	// ANNOUNCE — registro en el registry (con TTL)
-	// ====================================================================
 	case "ANNOUNCE":
 		if len(parts) == 4 {
 			did := parts[1]
@@ -327,19 +323,11 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			conn.WriteToUDP([]byte(ack), remoteAddr)
 		}
 
-	// ====================================================================
-	// OPEN_SESSION — signaling: "quiero hablar con B"
-	// ====================================================================
-	// El faro verifica que ambos están registrados y le devuelve a A
-	// los endpoints públicos de B (para hole punching).
-	// También le avisa a B que A quiere hablar (para que B empiece a
-	// escuchar paquetes de A).
 	case "OPEN_SESSION":
 		if len(parts) >= 3 {
 			targetDID := stripPadding(parts[1])
 			senderDID := stripPadding(parts[2])
 
-			// Verificar que ambos están registrados
 			senderEntry, senderExists := registryGet(senderDID)
 			targetEntry, targetExists := registryGet(targetDID)
 
@@ -349,7 +337,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				return
 			}
 
-			// Crear sesión
 			key := sessionKey(senderDID, targetDID)
 			sessionMu.Lock()
 			sessions[key] = &sessionEntry{
@@ -357,17 +344,15 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				didB:     targetDID,
 				created:  time.Now(),
 				lastSeen: time.Now(),
-				active:   false, // Todavía no se estableció la conexión directa
+				active:   false,
 			}
 			sessionMu.Unlock()
 			atomic.AddInt64(&statsSessions, 1)
 
-			// Devolver a A los endpoints de B
 			sessionInfo := fmt.Sprintf("SESSION_INFO %s %s %s",
 				targetDID, targetEntry.endpoint, senderEntry.endpoint)
 			conn.WriteToUDP([]byte(sessionInfo), remoteAddr)
 
-			// Avisar a B que A quiere hablar (para que B empiece el punch)
 			punchNotify := fmt.Sprintf("SESSION_INCOMING %s %s",
 				senderDID, senderEntry.endpoint)
 			conn.WriteToUDP([]byte(punchNotify), targetEntry.addr)
@@ -376,37 +361,30 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				senderDID[:15]+"...", targetDID[:15]+"...")
 		}
 
-	// ====================================================================
-	// PUNCH — hole punching: "A está en ip:port, mandale un paquete"
-	// ====================================================================
-	// El faro le dice al target que mande un paquete UDP a la dirección
-	// pública del sender. Ambos nodos hacen esto simultáneamente, lo que
-	// abre el mapeo del NAT en ambos lados.
+	// FIX: usar la IP pública del registry del sender, no la basura local que manda el nodo
 	case "PUNCH":
-		if len(parts) >= 4 {
+		if len(parts) >= 3 {
 			targetDID := stripPadding(parts[1])
 			senderDID := stripPadding(parts[2])
-			senderEndpoint := stripPadding(parts[3])
 
 			targetEntry, exists := registryGet(targetDID)
 			if !exists {
 				return
 			}
 
-			// Decirle al target: "mandale un paquete a sender en endpoint"
-			punchCmd := fmt.Sprintf("PUNCH_NOW %s %s", senderDID, senderEndpoint)
+			senderEntry, senderExists := registryGet(senderDID)
+			if !senderExists {
+				return
+			}
+
+			// Usar la IP pública REAL del sender (la del registry), no el endpoint del mensaje
+			punchCmd := fmt.Sprintf("PUNCH_NOW %s %s", senderDID, senderEntry.endpoint)
 			conn.WriteToUDP([]byte(punchCmd), targetEntry.addr)
 
 			fmt.Printf("[FARO] 👊 PUNCH: %s → %s (endpoint: %s)\n",
-				senderDID[:15]+"...", targetDID[:15]+"...", maskRemoteAddr(senderEndpoint))
+				senderDID[:15]+"...", targetDID[:15]+"...", maskRemoteAddr(senderEntry.endpoint))
 		}
 
-	// ====================================================================
-	// SESSION_ACK — "la sesión directa se estableció"
-	// ====================================================================
-	// Cuando ambos nodos confirman que el hole punching funcionó,
-	// el faro marca la sesión como activa y DEJA de relayear entre
-	// esos dos nodos (se hablan directo).
 	case "SESSION_ACK":
 		if len(parts) >= 3 {
 			targetDID := stripPadding(parts[1])
@@ -424,9 +402,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				senderDID[:15]+"...", targetDID[:15]+"...")
 		}
 
-	// ====================================================================
-	// CLOSE_SESSION — "cerrar sesión directa"
-	// ====================================================================
 	case "CLOSE_SESSION":
 		if len(parts) >= 3 {
 			targetDID := stripPadding(parts[1])
@@ -441,16 +416,12 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				senderDID[:15]+"...", targetDID[:15]+"...")
 		}
 
-	// ====================================================================
-	// RELAY — fallback: relayea si no hay sesión directa activa
-	// ====================================================================
 	case "RELAY":
 		if len(parts) == 4 {
 			targetDID := parts[1]
 			senderDID := parts[2]
 			payload := parts[3]
 
-			// Verificar si hay sesión directa activa
 			key := sessionKey(senderDID, targetDID)
 			sessionMu.RLock()
 			s, hasSession := sessions[key]
@@ -458,17 +429,13 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			sessionMu.RUnlock()
 
 			if sessionActive {
-				// Sesión directa activa: NO relayear, decirle al sender
-				// que use la conexión directa.
 				redirect := fmt.Sprintf("SESSION_REDIRECT %s", targetDID)
 				conn.WriteToUDP([]byte(redirect), remoteAddr)
 				return
 			}
 
-			// Fallback: relayear como antes
 			atomic.AddInt64(&statsRelays, 1)
 
-			// Buscar en registry UDP
 			targetEntry, existsUDP := registryGet(targetDID)
 			if existsUDP {
 				conn.WriteToUDP([]byte(payload), targetEntry.addr)
@@ -477,7 +444,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				return
 			}
 
-			// Buscar en registry WSS
 			wsMu.RLock()
 			targetWS, existsWS := wsRegistry[targetDID]
 			wsMu.RUnlock()
@@ -501,9 +467,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			conn.WriteToUDP([]byte(errorMsg), remoteAddr)
 		}
 
-	// ====================================================================
-	// WHERE_IS — presencia (busca en ambos registries)
-	// ====================================================================
 	case "WHERE_IS":
 		if len(parts) >= 2 {
 			did := stripPadding(parts[1])
@@ -518,15 +481,9 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			}
 		}
 
-	// ====================================================================
-	// VERIFY_HASH
-	// ====================================================================
 	case "VERIFY_HASH":
 		handleVerifyHash(conn, remoteAddr)
 
-	// ====================================================================
-	// STATS — métricas del faro
-	// ====================================================================
 	case "STATS":
 		resp := fmt.Sprintf(
 			`{"nodes":%d,"relays":%d,"sessions":%d,"dropped":%d,"uptime_s":%d,"version":"%s","commit":"%s"}`,
@@ -571,7 +528,7 @@ func handleVerifyHash(conn *net.UDPConn, addr *net.UDPAddr) {
 }
 
 // ============================================================================
-// HANDLER WEBSOCKET (con signaling)
+// HANDLER WEBSOCKET
 // ============================================================================
 
 func handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -581,7 +538,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Límite de conexiones WSS
 	wsMu.RLock()
 	wsCount := len(wsRegistry)
 	wsMu.RUnlock()
@@ -689,7 +645,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 				sessionMu.Unlock()
 
-				// Devolver endpoints del target
 				var targetEndpoint string
 				if entry, ok := registryGet(targetDID); ok {
 					targetEndpoint = entry.endpoint
@@ -697,7 +652,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				sessionInfo := fmt.Sprintf("SESSION_INFO %s %s", targetDID, targetEndpoint)
 				conn.WriteMessage(websocket.TextMessage, []byte(sessionInfo))
 
-				// Avisar al target
 				if targetEntry, ok := registryGet(targetDID); ok {
 					udpConnsMu.RLock()
 					udpConn := globalUDPConns["54321"]
@@ -744,7 +698,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				senderDID := parts[2]
 				payload := parts[3]
 
-				// Verificar sesión directa
 				key := sessionKey(senderDID, targetDID)
 				sessionMu.RLock()
 				s, hasSession := sessions[key]
@@ -757,7 +710,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				// Fallback relay
 				atomic.AddInt64(&statsRelays, 1)
 
 				wsMu.RLock()
@@ -779,7 +731,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				// Buscar en UDP
 				if entry, ok := registryGet(targetDID); ok {
 					udpConnsMu.RLock()
 					udpConn := globalUDPConns["54321"]
@@ -857,18 +808,18 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 // SERVIDORES
 // ============================================================================
 
-// Worker pool para UDP (escalabilidad: 8 workers en vez de 1 hilo)
 type packet struct {
 	data []byte
 	addr *net.UDPAddr
 }
 
 func startUDPServer(port string) {
-	addr, err := net.ResolveUDPAddr("udp", "0.0.0.0:"+port)
+	// FIX: udp4 en vez de udp, para matar IPv6
+	addr, err := net.ResolveUDPAddr("udp4", "0.0.0.0:"+port)
 	if err != nil {
 		log.Fatalf("Error resolviendo UDP %s: %v", port, err)
 	}
-	conn, err := net.ListenUDP("udp", addr)
+	conn, err := net.ListenUDP("udp4", addr)
 	if err != nil {
 		log.Fatalf("Error al escuchar UDP %s: %v", port, err)
 	}
@@ -891,7 +842,7 @@ func startUDPServer(port string) {
 		}()
 	}
 
-	buf := make([]byte, 65536) // Buffer máximo UDP
+	buf := make([]byte, 65536)
 	for {
 		n, remoteAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
@@ -902,7 +853,7 @@ func startUDPServer(port string) {
 		select {
 		case packetChan <- packet{data: data, addr: remoteAddr}:
 		default:
-			atomic.AddInt64(&statsDropped, 1) // Canal lleno, descartar
+			atomic.AddInt64(&statsDropped, 1)
 		}
 	}
 }
@@ -931,13 +882,12 @@ func startWebSocketServer() {
 }
 
 // ============================================================================
-// LIMPIEZA: registry TTL + sesiones expiradas
+// LIMPIEZA
 // ============================================================================
 
 func startCleaner() {
 	ticker := time.NewTicker(60 * time.Second)
 	for range ticker.C {
-		// Limpiar registry UDP (90s sin ANNOUNCE)
 		expired := 0
 		for i := range shards {
 			shards[i].mu.Lock()
@@ -950,7 +900,6 @@ func startCleaner() {
 			shards[i].mu.Unlock()
 		}
 
-		// Limpiar sesiones expiradas (5 min sin actividad)
 		sessionMu.Lock()
 		for key, s := range sessions {
 			if time.Since(s.lastSeen) > 5*time.Minute {
@@ -984,7 +933,6 @@ func main() {
 	go startUDPServer("443")
 	go startWebSocketServer()
 
-	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	<-sigChan

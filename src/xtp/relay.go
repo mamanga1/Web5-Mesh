@@ -83,7 +83,11 @@ func (rt *RelayTransport) Send(peerDID string, command string) error {
 	rt.mu.RUnlock()
 
 	if !exists {
-		return fmt.Errorf("peer %s no está en el ACL", peerDID[:20]+"...")
+		// FIX: no paniquear si peerDID tiene menos de 20 caracteres
+		if len(peerDID) > 20 {
+			return fmt.Errorf("peer %s no está en el ACL", peerDID[:20]+"...")
+		}
+		return fmt.Errorf("peer %s no está en el ACL", peerDID)
 	}
 
 	inner := InnerPayload{

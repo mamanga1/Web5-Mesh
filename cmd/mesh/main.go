@@ -143,41 +143,52 @@ func handleCommand(cmd string) string {
 	return "✅ ACK"
 }
 
-// ExecuteRealCommand usa la conexión global de shell.go (globalConn / globalConnWS)
+// FIX M1: ExecuteRealCommand usa XTP para chat normal, fallback legacy para grupos
 func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string {
-	acl, err := crypto.LoadACL()
-	if err != nil {
-		return fmt.Sprintf("❌ Error cargando ACL: %v", err)
+	if targetDID == "" {
+		return "❌ DID destino vacío"
 	}
 
-	_, pubX, err := acl.GetPeerKeys(targetDID)
-	if err != nil {
-		return "❌ DID no encontrado en tu acl.json."
+	// Fallback legacy para comandos de grupo (hasta migrar GROUP_* a XTP)
+	if strings.HasPrefix(command, "GROUP_") || strings.HasPrefix(command, "GROUP:") {
+		acl, err := crypto.LoadACL()
+		if err != nil {
+			return fmt.Sprintf("❌ Error cargando ACL: %v", err)
+		}
+		_, pubX, err := acl.GetPeerKeys(targetDID)
+		if err != nil {
+			return "❌ DID no encontrado en tu acl.json."
+		}
+		sharedKey, err := crypto.DeriveSharedKey(myID.PrivKeyX, pubX)
+		if err != nil {
+			return fmt.Sprintf("❌ Error derivando clave: %v", err)
+		}
+		inner := InnerPayload{
+			FromDID: myID.DID,
+			TS:      time.Now().Unix(),
+			Cmd:     command,
+		}
+		payload, err := buildEncryptedPayload(myID, sharedKey, inner)
+		if err != nil {
+			return fmt.Sprintf("❌ Error cifrando: %v", err)
+		}
+		relayCmd := fmt.Sprintf("RELAY %s %s %s", targetDID, myID.DID, addPadding(payload))
+		if err := sendToFaroShell(relayCmd); err != nil {
+			return fmt.Sprintf("❌ Error enviando: %v", err)
+		}
+		return "📤 Mensaje de grupo enviado (relay)"
 	}
 
-	sharedKey, err := crypto.DeriveSharedKey(myID.PrivKeyX, pubX)
-	if err != nil {
-		return fmt.Sprintf("❌ Error derivando clave: %v", err)
+	// XTP: intentar directo, fallback a relay automático
+	if globalTM != nil {
+		transport, err := globalTM.Send(targetDID, command)
+		if err != nil {
+			return fmt.Sprintf("❌ XTP error: %v", err)
+		}
+		return fmt.Sprintf("📤 Mensaje enviado (%s)", transport)
 	}
 
-	inner := InnerPayload{
-		FromDID: myID.DID,
-		TS:      time.Now().Unix(),
-		Cmd:     command,
-	}
-
-	payload, err := buildEncryptedPayload(myID, sharedKey, inner)
-	if err != nil {
-		return fmt.Sprintf("❌ Error cifrando: %v", err)
-	}
-
-	// Usar conexión de shell.go
-	relayCmd := fmt.Sprintf("RELAY %s %s %s", targetDID, myID.DID, addPadding(payload))
-	if err := sendToFaroShell(relayCmd); err != nil {
-		return fmt.Sprintf("❌ Error enviando: %v", err)
-	}
-
-	return "📤 Mensaje enviado"
+	return "❌ Transporte XTP no inicializado"
 }
 
 func init() {

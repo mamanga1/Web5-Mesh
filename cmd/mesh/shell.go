@@ -23,10 +23,6 @@ import (
 	"web5-mesh/src/xtp"
 )
 
-// ============================================================================
-// RESTAURAR TERMINAL
-// ============================================================================
-
 func restoreTerminal() {
 	fmt.Print("\x1b[?12l")
 	fmt.Print("\x1b[?25h")
@@ -40,10 +36,6 @@ func restoreTerminal() {
 	cmd.Stderr = os.Stderr
 	_ = cmd.Run()
 }
-
-// ============================================================================
-// COMPLETER
-// ============================================================================
 
 func completer(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
@@ -124,28 +116,20 @@ func completer(d prompt.Document) []prompt.Suggest {
 	return s
 }
 
-// ============================================================================
-// VARIABLES GLOBALES
-// ============================================================================
-
 var (
-	globalConn      *net.UDPConn
-	globalConnWS    *websocket.Conn
-	globalUseWS     bool
-	globalACLIndex  map[[4]byte]peerKeys
-	globalID        *crypto.Identity
-	globalFaroAddr  string
-	globalQuit      chan struct{}
-	msgChan         = make(chan string, 100)
-	cmdHistory      []string
+	globalConn     *net.UDPConn
+	globalConnWS   *websocket.Conn
+	globalUseWS    bool
+	globalACLIndex map[[4]byte]peerKeys
+	globalID       *crypto.Identity
+	globalFaroAddr string
+	globalQuit     chan struct{}
+	msgChan        = make(chan string, 100)
+	cmdHistory     []string
 	activeRecipient string
 	msgHistory      map[string][]string
 	lastPublicIP    string
 )
-
-// ============================================================================
-// ACTIVIDAD (para watchdog de reconexión)
-// ============================================================================
 
 var (
 	activityMu   sync.Mutex
@@ -167,10 +151,6 @@ func staleSince() time.Duration {
 	return time.Since(lastActivity)
 }
 
-// ============================================================================
-// XTP: TRANSPORT MANAGER (Fase 2)
-// ============================================================================
-
 var globalTM *xtp.TransportManager
 
 type faroSenderShell struct{}
@@ -179,26 +159,18 @@ func (f faroSenderShell) SendToFaro(msg string) error {
 	return sendToFaroShell(msg)
 }
 
-// ============================================================================
-// FIX #3: buildXTPACLIndex ahora incluye PubKeyX
-// ============================================================================
-
 func buildXTPACLIndex() map[[4]byte]xtp.PeerKeys {
 	idx := make(map[[4]byte]xtp.PeerKeys, len(globalACLIndex))
 	for kid, pk := range globalACLIndex {
 		idx[kid] = xtp.PeerKeys{
 			DID:       pk.DID,
 			PubKeyEd:  pk.PubKeyEd,
-			PubKeyX:   pk.PubKeyX, // ← FIX #3: clave X25519 para Noise IK
+			PubKeyX:   pk.PubKeyX,
 			SharedKey: pk.SharedKey,
 		}
 	}
 	return idx
 }
-
-// ============================================================================
-// isCommand
-// ============================================================================
 
 func isCommand(input string) bool {
 	known := []string{
@@ -221,10 +193,6 @@ func isCommand(input string) bool {
 	}
 	return false
 }
-
-// ============================================================================
-// CONEXIÓN AL FARO
-// ============================================================================
 
 func connectToFaroShell() error {
 	if globalFaroAddr == "" {
@@ -251,12 +219,13 @@ func connectToFaroShell() error {
 	return fmt.Errorf("sin ruta al faro %s", globalFaroAddr)
 }
 
+// FIX: udp4 en vez de udp
 func connectUDPShell(addr string) error {
-	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
 		return fmt.Errorf("resolviendo UDP: %v", err)
 	}
-	conn, err := net.DialUDP("udp", nil, udpAddr)
+	conn, err := net.DialUDP("udp4", nil, udpAddr)
 	if err != nil {
 		return fmt.Errorf("conectando UDP: %v", err)
 	}
@@ -362,10 +331,6 @@ func readFromFaroShell() (string, error) {
 	return string(buf[:n]), nil
 }
 
-// ============================================================================
-// LISTENER + ROAMING
-// ============================================================================
-
 func startNetworkListener() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -406,12 +371,10 @@ func startNetworkListener() {
 			raw = stripPadding(raw)
 			raw = extractPayload(raw)
 
-			// XTP: Rutear al TransportManager (signaling o relay)
 			if globalTM != nil && globalTM.HandleIncoming(raw) {
 				continue
 			}
 
-			// === ACK_IP: Roaming ===
 			if strings.HasPrefix(raw, "ACK_IP ") {
 				parts := strings.SplitN(raw, " ", 2)
 				if len(parts) == 2 {
@@ -536,10 +499,6 @@ func startNetworkListener() {
 	}
 }
 
-// ============================================================================
-// ANNOUNCE LOOP
-// ============================================================================
-
 func startAnnounceLoop() {
 	for globalConn == nil && globalConnWS == nil {
 		select {
@@ -569,10 +528,6 @@ func startAnnounceLoop() {
 	}
 }
 
-// ============================================================================
-// WATCHDOG
-// ============================================================================
-
 func startWatchdog() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
@@ -597,7 +552,6 @@ func startWatchdog() {
 					msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
 					sendToFaroShell(addPadding(msg))
 					touchActivity()
-					// XTP: Notificar al FSM
 					if globalTM != nil {
 						globalTM.FSM().Send(xtp.EvFaroConnected, nil)
 						globalTM.FSM().Send(xtp.EvAnnounceSent, nil)
@@ -610,10 +564,6 @@ func startWatchdog() {
 		}
 	}
 }
-
-// ============================================================================
-// SHELL PRINCIPAL
-// ============================================================================
 
 func runInteractiveShell() {
 	var err error
@@ -637,16 +587,12 @@ func runInteractiveShell() {
 
 	globalACLIndex, _ = buildACLIndex(globalID)
 
-	// ========================================================================
-	// FIX #5: OnMessage con ruteo de mensajes de grupo
-	// ========================================================================
 	globalTM = xtp.NewTransportManager(
 		globalID,
 		faroSenderShell{},
 		buildXTPACLIndex(),
 		xtp.ManagerCallbacks{
 			OnMessage: func(peerDID, displayName, command string) {
-				// Rutear mensajes de grupo (mismos prefijos que el listener legacy)
 				if strings.HasPrefix(command, "GROUP_SYNC:") {
 					parts := strings.SplitN(command, ":", 3)
 					if len(parts) == 3 {
@@ -690,7 +636,6 @@ func runInteractiveShell() {
 						return
 					}
 				}
-				// Mensaje de chat normal
 				msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, command)
 			},
 			OnDirectSessionActive: func(peerDID string) {
@@ -712,7 +657,6 @@ func runInteractiveShell() {
 		xtp.DefaultManagerConfig(),
 	)
 
-	// XTP: Notificar al FSM que el faro está conectado
 	if globalTM != nil {
 		globalTM.FSM().Send(xtp.EvConnectFaro, nil)
 		if err == nil {
@@ -729,11 +673,11 @@ func runInteractiveShell() {
 	pubEdHex := hex.EncodeToString(globalID.PubKeyEd)
 	pubXHex := hex.EncodeToString(globalID.PubKeyX[:])
 	fmt.Println(" PubKey Ed: " + pubEdHex)
-	fmt.Println(" PubKey X:  " + pubXHex)
+	fmt.Println(" PubKey X: " + pubXHex)
 	fmt.Println()
 	fmt.Println(" 📋 Para que otro nodo te agregue, decile que ejecute:")
-	fmt.Printf("   acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
-	fmt.Printf("   alias add  %s\n", globalID.DID)
+	fmt.Printf(" acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
+	fmt.Printf(" alias add %s\n", globalID.DID)
 	fmt.Println()
 	if globalFaroAddr != "" {
 		if globalUseWS {
@@ -798,9 +742,6 @@ func runInteractiveShell() {
 			cmdHistory = append(cmdHistory, input)
 		}
 
-		// ============================================================
-		// XTP STATUS
-		// ============================================================
 		if input == "xtp" || input == "xtp status" {
 			if globalTM == nil {
 				fmt.Println("❌ TransportManager no inicializado")
@@ -809,16 +750,13 @@ func runInteractiveShell() {
 			stats := globalTM.Stats()
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			fmt.Println(" 📊 XTP Transport Manager")
-			fmt.Printf("    Estado FSM: %s\n", stats.FSMState)
-			fmt.Printf("    Sesiones directas: %d\n", stats.DirectSessions)
-			fmt.Printf("    Relay activo: %v\n", !stats.RelayClosed)
+			fmt.Printf(" Estado FSM: %s\n", stats.FSMState)
+			fmt.Printf(" Sesiones directas: %d\n", stats.DirectSessions)
+			fmt.Printf(" Relay activo: %v\n", !stats.RelayClosed)
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			continue
 		}
 
-		// ============================================================
-		// XTP SEND
-		// ============================================================
 		if strings.HasPrefix(input, "xtp ") {
 			parts := strings.SplitN(input, " ", 3)
 			if len(parts) == 3 {
@@ -842,16 +780,12 @@ func runInteractiveShell() {
 					fmt.Printf("📤 Enviado por %s → %s\n", transport, targetDID[:20]+"...")
 				}
 			} else {
-				fmt.Println("Uso: xtp <alias|DID> <mensaje>")
+				fmt.Println("Uso: xtp <did|alias> <mensaje>")
 				fmt.Println("Ejemplo: xtp juan hola mundo")
-				fmt.Println("El transporte (directo Noise IK o relay) se elige automáticamente.")
 			}
 			continue
 		}
 
-		// ============================================================
-		// /to
-		// ============================================================
 		if strings.HasPrefix(input, "/to ") {
 			parts := strings.SplitN(input, " ", 3)
 			if len(parts) == 2 {
@@ -865,7 +799,7 @@ func runInteractiveShell() {
 					if history, ok := msgHistory[alias]; ok && len(history) > 0 {
 						fmt.Printf("📜 Historial de mensajes con grupo '%s':\n", alias)
 						for i, msg := range history {
-							fmt.Printf("  %d. %s\n", i+1, msg)
+							fmt.Printf(" %d. %s\n", i+1, msg)
 						}
 					}
 					fmt.Printf("📡 Modo grupo '%s'. Escribí y dale Enter.\n", alias)
@@ -874,7 +808,7 @@ func runInteractiveShell() {
 					if history, ok := msgHistory[target]; ok && len(history) > 0 {
 						fmt.Printf("📜 Historial de mensajes con '%s':\n", target)
 						for i, msg := range history {
-							fmt.Printf("  %d. %s\n", i+1, msg)
+							fmt.Printf(" %d. %s\n", i+1, msg)
 						}
 					}
 					fmt.Printf("📡 Modo chat con '%s'. Escribí y dale Enter.\n", target)
@@ -900,9 +834,6 @@ func runInteractiveShell() {
 			continue
 		}
 
-		// ============================================================
-		// MODO CONTEXTO ACTIVO
-		// ============================================================
 		if activeRecipient != "" && !isCommand(input) {
 			if strings.HasPrefix(activeRecipient, "chat:") {
 				alias := strings.TrimPrefix(activeRecipient, "chat:")
