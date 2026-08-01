@@ -7,16 +7,33 @@ import (
 	"github.com/flynn/noise"
 )
 
+// HandshakeState envuelve un handshake Noise IK (patrón IK:
+// el iniciador conoce la clave estática del respondedor de antemano).
+//
+// Después del handshake, hay DOS CipherStates:
+//   - sendCipher: para cifrar mensajes salientes (Encrypt)
+//   - recvCipher: para descifrar mensajes entrantes (Decrypt)
+//
+// El orden depende del rol:
+//   - Iniciador: sendCipher = c1, recvCipher = c2
+//   - Respondedor: sendCipher = c2, recvCipher = c1
 type HandshakeState struct {
 	cs          noise.CipherSuite
 	hs          *noise.HandshakeState
-	sendCipher  *noise.CipherState
-	recvCipher  *noise.CipherState
+	sendCipher  *noise.CipherState // Para Encrypt (mensajes salientes)
+	recvCipher  *noise.CipherState // Para Decrypt (mensajes entrantes)
 	isInitiator bool
 	completed   bool
-	mu          sync.Mutex
+	mu          sync.Mutex // Protege sendCipher/recvCipher/completed
 }
 
+// NewHandshakeIK crea un nuevo handshake Noise IK.
+//
+// Para el INICIADOR: myPrivX, myPubX, y theirPubX (la clave pública
+// estática del peer, que se obtiene del ACL).
+//
+// Para el RESPONDEDOR: myPrivX, myPubX. theirPubX puede ser nil
+// (IK la recibe del iniciador durante el handshake).
 func NewHandshakeIK(isInitiator bool, myPrivX *[32]byte, myPubX *[32]byte, theirPubX *[32]byte) (*HandshakeState, error) {
 	cs := noise.NewCipherSuite(noise.DH25519, noise.CipherChaChaPoly, noise.HashSHA256)
 
@@ -54,6 +71,8 @@ func NewHandshakeIK(isInitiator bool, myPrivX *[32]byte, myPubX *[32]byte, their
 	}, nil
 }
 
+// WriteHandshake escribe un mensaje de handshake.
+// Retorna el mensaje (para enviar al peer) y true si el handshake se completó.
 func (h *HandshakeState) WriteHandshake(payload []byte) (msg []byte, completed bool, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -63,13 +82,14 @@ func (h *HandshakeState) WriteHandshake(payload []byte) (msg []byte, completed b
 		return nil, false, err
 	}
 
+	// Cuando el handshake termina, flynn/noise devuelve los dos CipherStates.
 	if c1 != nil && c2 != nil {
 		if h.isInitiator {
-			h.sendCipher = c1
-			h.recvCipher = c2
+			h.sendCipher = c1 // Iniciador cifra con c1
+			h.recvCipher = c2 // Iniciador descifra con c2
 		} else {
-			h.sendCipher = c2
-			h.recvCipher = c1
+			h.sendCipher = c2 // Respondedor cifra con c2
+			h.recvCipher = c1 // Respondedor descifra con c1
 		}
 		h.completed = true
 	}
@@ -77,6 +97,8 @@ func (h *HandshakeState) WriteHandshake(payload []byte) (msg []byte, completed b
 	return out, h.completed, nil
 }
 
+// ReadHandshake lee un mensaje de handshake del peer.
+// Retorna el payload extraído y true si el handshake se completó.
 func (h *HandshakeState) ReadHandshake(msg []byte) (payload []byte, completed bool, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -100,12 +122,14 @@ func (h *HandshakeState) ReadHandshake(msg []byte) (payload []byte, completed bo
 	return p, h.completed, nil
 }
 
+// IsCompleted devuelve true si el handshake terminó y los CipherStates están listos.
 func (h *HandshakeState) IsCompleted() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.completed
 }
 
+// Encrypt cifra un mensaje saliente (usa sendCipher).
 func (h *HandshakeState) Encrypt(plaintext []byte) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -115,6 +139,7 @@ func (h *HandshakeState) Encrypt(plaintext []byte) ([]byte, error) {
 	return h.sendCipher.Encrypt(nil, nil, plaintext)
 }
 
+// Decrypt descifra un mensaje entrante (usa recvCipher).
 func (h *HandshakeState) Decrypt(ciphertext []byte) ([]byte, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -124,6 +149,8 @@ func (h *HandshakeState) Decrypt(ciphertext []byte) ([]byte, error) {
 	return h.recvCipher.Decrypt(nil, nil, ciphertext)
 }
 
+// Rekey rota las claves de AMBOS CipherStates (forward secrecy adicional).
+// Se recomienda llamar cada N mensajes o cada T tiempo.
 func (h *HandshakeState) Rekey() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -133,22 +160,4 @@ func (h *HandshakeState) Rekey() {
 	if h.recvCipher != nil {
 		h.recvCipher.Rekey()
 	}
-}
-
-// ============================================================================
-// FIX #1: PeerStatic — necesario para verificar la identidad del iniciador
-// ============================================================================
-
-// PeerStatic retorna la clave pública estática del peer, verificada
-// criptográficamente durante el handshake Noise IK.
-// Solo válido después de que el handshake se completó.
-// El respondedor DEBE comparar esto contra la PubKeyX del ACL para el
-// DID reclamado. Si no coincide, cerrar la sesión (suplantación).
-func (h *HandshakeState) PeerStatic() []byte {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if !h.completed {
-		return nil
-	}
-	return h.hs.PeerStatic()
 }

@@ -22,7 +22,7 @@ type TransportManager struct {
 
 	identity *crypto.Identity
 	faro     FaroSender
-	fsm      *FSM // FSM global (estado general del transporte)
+	fsm      *FSM
 
 	relay  *RelayTransport
 	direct map[string]*DirectTransport
@@ -35,9 +35,6 @@ type TransportManager struct {
 	closed bool
 
 	autoDirect bool
-
-	// FIX #14: no lanzar múltiples hole punchings simultáneos por peer
-	pendingDirect map[string]bool
 }
 
 type ManagerConfig struct {
@@ -79,16 +76,15 @@ func NewTransportManager(
 	relay := NewRelayTransport(identity, faro, aclIndex, relayCb)
 
 	tm := &TransportManager{
-		identity:      identity,
-		faro:          faro,
-		fsm:           fsm,
-		relay:         relay,
-		direct:        make(map[string]*DirectTransport),
-		aclIndex:      aclIndex,
-		aclByDID:      aclByDID,
-		cb:            cb,
-		autoDirect:    config.AutoDirect,
-		pendingDirect: make(map[string]bool), // FIX #14
+		identity:   identity,
+		faro:       faro,
+		fsm:        fsm,
+		relay:      relay,
+		direct:     make(map[string]*DirectTransport),
+		aclIndex:   aclIndex,
+		aclByDID:   aclByDID,
+		cb:         cb,
+		autoDirect: config.AutoDirect,
 	}
 
 	fsm.OnEnter(Direct, func(from, to State, event Event, meta map[string]interface{}) {
@@ -128,32 +124,16 @@ func (tm *TransportManager) Send(peerDID string, command string) (transport stri
 	if autoDirect && !hasDirect {
 		peer, hasPeer := tm.getPeerKeys(peerDID)
 		if hasPeer {
+			// ← FIX: Usar PubKeyX (X25519), NO PubKeyEd (Ed25519)
 			if len(peer.PubKeyX) != 32 {
 				if tm.cb.OnError != nil {
 					tm.cb.OnError("xtp:"+peerDID[:15], fmt.Errorf("peer sin PubKeyX válida (len=%d)", len(peer.PubKeyX)))
 				}
 			} else {
-				// FIX #14: no lanzar múltiples hole punchings simultáneos
-				tm.mu.Lock()
-				alreadyPending := tm.pendingDirect[peerDID]
-				if !alreadyPending {
-					tm.pendingDirect[peerDID] = true
-				}
-				tm.mu.Unlock()
+				peerPubX := new([32]byte)
+				copy(peerPubX[:], peer.PubKeyX[:32])
 
-				if !alreadyPending {
-					peerPubX := new([32]byte)
-					copy(peerPubX[:], peer.PubKeyX[:32])
-
-					go func() {
-						defer func() {
-							tm.mu.Lock()
-							delete(tm.pendingDirect, peerDID)
-							tm.mu.Unlock()
-						}()
-						tm.tryDirectSession(peerDID, peerPubX)
-					}()
-				}
+				go tm.tryDirectSession(peerDID, peerPubX)
 			}
 
 			if err := tm.relay.Send(peerDID, command); err != nil {
@@ -168,11 +148,6 @@ func (tm *TransportManager) Send(peerDID string, command string) (transport stri
 	}
 	return "relay", nil
 }
-
-// ============================================================================
-// FIX #5: FSM por-sesión (cada DirectTransport tiene su propia FSM)
-// FIX #1: SetExpectedPeerPubX (para verificación de identidad del respondedor)
-// ============================================================================
 
 func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte) {
 	tm.mu.Lock()
@@ -226,25 +201,8 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 		},
 	}
 
-	// FIX #5: FSM NUEVA por sesión (no compartir la del manager)
-	sessionFSM := NewFSM()
-	sessionFSM.OnEnter(Direct, func(from, to State, event Event, meta map[string]interface{}) {
-		if tm.cb.OnStateChange != nil {
-			tm.cb.OnStateChange(from, to, event)
-		}
-	})
-	sessionFSM.OnEnter(RelayFallback, func(from, to State, event Event, meta map[string]interface{}) {
-		if tm.cb.OnStateChange != nil {
-			tm.cb.OnStateChange(from, to, event)
-		}
-	})
-
-	dt := NewDirectTransport(tm.identity.DID, sessionFSM, tm.faro, dtCb)
+	dt := NewDirectTransport(tm.identity.DID, tm.fsm, tm.faro, dtCb)
 	dt.SetIdentity(tm.identity)
-
-	// FIX #1: pasar la clave esperada para verificación de identidad
-	dt.SetExpectedPeerPubX(peerPubX)
-
 	tm.direct[peerDID] = dt
 	tm.mu.Unlock()
 
@@ -347,30 +305,8 @@ func (tm *TransportManager) handleFaroSignal(raw string) bool {
 					tm.mu.Unlock()
 				},
 			}
-
-			// FIX #5: FSM NUEVA por sesión
-			sessionFSM := NewFSM()
-			sessionFSM.OnEnter(Direct, func(from, to State, event Event, meta map[string]interface{}) {
-				if tm.cb.OnStateChange != nil {
-					tm.cb.OnStateChange(from, to, event)
-				}
-			})
-			sessionFSM.OnEnter(RelayFallback, func(from, to State, event Event, meta map[string]interface{}) {
-				if tm.cb.OnStateChange != nil {
-					tm.cb.OnStateChange(from, to, event)
-				}
-			})
-
-			dt = NewDirectTransport(tm.identity.DID, sessionFSM, tm.faro, dtCb)
+			dt = NewDirectTransport(tm.identity.DID, tm.fsm, tm.faro, dtCb)
 			dt.SetIdentity(tm.identity)
-
-			// FIX #1: buscar la PubKeyX del sender en el ACL para verificación
-			if peer, ok := tm.aclByDID[senderDID]; ok && len(peer.PubKeyX) == 32 {
-				pubX := new([32]byte)
-				copy(pubX[:], peer.PubKeyX[:32])
-				dt.SetExpectedPeerPubX(pubX)
-			}
-
 			tm.direct[senderDID] = dt
 		}
 		tm.mu.Unlock()
