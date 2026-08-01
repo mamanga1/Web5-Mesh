@@ -135,7 +135,7 @@ func (tm *TransportManager) Send(peerDID string, command string) (transport stri
 				go func() {
 					defer func() {
 						if r := recover(); r != nil {
-							fmt.Printf("[XTP-MGR] ⚠️ Panic en tryDirectSession: %v\n", r)
+							Debugf("[XTP-MGR] ⚠️ Panic en tryDirectSession: %v\n", r)
 						}
 					}()
 					tm.tryDirectSession(peerDID, peerPubX)
@@ -168,10 +168,10 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 
 	dtCb := DirectCallbacks{
 		OnPunchComplete: func(peerDID string, peerAddr *net.UDPAddr) {
-			fmt.Printf("[XTP-MGR] 👊 Hole punching exitoso con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 👊 Hole punching exitoso con %s\n", peerDID[:20]+"...")
 		},
 		OnSessionActive: func(peerDID string) {
-			fmt.Printf("[XTP-MGR] 🔐 Sesión directa activa con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 🔐 Sesión directa activa con %s\n", peerDID[:20]+"...")
 			if tm.cb.OnDirectSessionActive != nil {
 				tm.cb.OnDirectSessionActive(peerDID)
 			}
@@ -183,7 +183,7 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 			}
 		},
 		OnSessionLost: func(peerDID string) {
-			fmt.Printf("[XTP-MGR] 💀 Sesión directa perdida con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 💀 Sesión directa perdida con %s\n", peerDID[:20]+"...")
 			if tm.cb.OnDirectSessionLost != nil {
 				tm.cb.OnDirectSessionLost(peerDID)
 			}
@@ -192,7 +192,7 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 			tm.mu.Unlock()
 		},
 		OnFallbackToRelay: func(peerDID string) {
-			fmt.Printf("[XTP-MGR] 🔄 Fallback a relay con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 🔄 Fallback a relay con %s\n", peerDID[:20]+"...")
 			if tm.cb.OnFallbackToRelay != nil {
 				tm.cb.OnFallbackToRelay(peerDID)
 			}
@@ -227,7 +227,7 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 	tm.mu.Unlock()
 
 	if err := dt.OpenSession(peerDID, peerPubX); err != nil {
-		fmt.Printf("[XTP-MGR] ❌ Sesión directa falló con %s: %v\n", peerDID[:20]+"...", err)
+		Debugf("[XTP-MGR] ❌ Sesión directa falló con %s: %v\n", peerDID[:20]+"...", err)
 		tm.mu.Lock()
 		delete(tm.direct, peerDID)
 		tm.mu.Unlock()
@@ -292,7 +292,7 @@ func (tm *TransportManager) handleFaroSignal(raw string) bool {
 		_, inACL := tm.aclByDID[senderDID]
 		tm.mu.RUnlock()
 		if !inACL {
-			fmt.Printf("[XTP-MGR] ⚠️ SESSION_INCOMING rechazado: %s no está en ACL\n", senderDID[:20]+"...")
+			Debugf("[XTP-MGR] ⚠️ SESSION_INCOMING rechazado: %s no está en ACL\n", senderDID[:20]+"...")
 			return true
 		}
 
@@ -453,7 +453,7 @@ func (tm *TransportManager) Close() {
 	}
 
 	tm.relay.Close()
-	fmt.Printf("[XTP-MGR] 🔒 TransportManager cerrado\n")
+	Debugf("[XTP-MGR] 🔒 TransportManager cerrado\n")
 }
 
 func (tm *TransportManager) getPeerKeys(peerDID string) (PeerKeys, bool) {

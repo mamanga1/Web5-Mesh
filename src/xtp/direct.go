@@ -160,7 +160,7 @@ func (dt *DirectTransport) OpenSession(peerDID string, peerPubX *[32]byte) error
 	if err := dt.faro.SendToFaro(openMsg); err != nil {
 		return fmt.Errorf("enviando OPEN_SESSION: %w", err)
 	}
-	fmt.Printf("[XTP] 📤 OPEN_SESSION → %s\n", peerDID[:20]+"...")
+	Debugf("[XTP] 📤 OPEN_SESSION → %s\n", peerDID[:20]+"...")
 
 	sessionInfo, err := dt.waitForFaroSignal("SESSION_INFO", 10*time.Second)
 	if err != nil {
@@ -193,7 +193,7 @@ func (dt *DirectTransport) OpenSession(peerDID string, peerPubX *[32]byte) error
 		"peer":     peerDID,
 		"endpoint": parts[2],
 	})
-	fmt.Printf("[XTP] 📥 SESSION_INFO: peer en %s\n", parts[2])
+	Debugf("[XTP] 📥 SESSION_INFO: peer en %s\n", parts[2])
 
 	return dt.punch(peerPubX)
 }
@@ -214,7 +214,7 @@ func (dt *DirectTransport) HandleIncomingSession(raw string) error {
 	senderEndpoint := parts[2]
 
 	if senderEndpoint == "ws" {
-		fmt.Printf("[XTP] ⚠️ Peer %s está en WSS, usando relay\n", senderDID[:20]+"...")
+		Debugf("[XTP] ⚠️ Peer %s está en WSS, usando relay\n", senderDID[:20]+"...")
 		if dt.cb.OnFallbackToRelay != nil {
 			dt.cb.OnFallbackToRelay(senderDID)
 		}
@@ -237,7 +237,7 @@ func (dt *DirectTransport) HandleIncomingSession(raw string) error {
 		"peer":     senderDID,
 		"endpoint": senderEndpoint,
 	})
-	fmt.Printf("[XTP] 📥 SESSION_INCOMING: %s desde %s\n", senderDID[:20]+"...", senderEndpoint)
+	Debugf("[XTP] 📥 SESSION_INCOMING: %s desde %s\n", senderDID[:20]+"...", senderEndpoint)
 
 	if err := dt.openPunchSocket(); err != nil {
 		return fmt.Errorf("abriendo socket de punch: %w", err)
@@ -257,7 +257,7 @@ func (dt *DirectTransport) HandleIncomingSession(raw string) error {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("[XTP] ⚠️ Panic en watcher de sesión: %v\n", r)
+				Debugf("[XTP] ⚠️ Panic en watcher de sesión: %v\n", r)
 			}
 		}()
 		deadline := time.After(PunchTimeout + HandshakeTimeout)
@@ -273,7 +273,7 @@ func (dt *DirectTransport) HandleIncomingSession(raw string) error {
 				dt.punching = false
 				dt.mu.Unlock()
 				if !active {
-					fmt.Printf("[XTP] ❌ Timeout esperando sesión directa con %s\n", senderDID[:20]+"...")
+					Debugf("[XTP] ❌ Timeout esperando sesión directa con %s\n", senderDID[:20]+"...")
 					dt.fsm.Send(EvPunchFailed, map[string]interface{}{"peer": senderDID})
 					if dt.cb.OnFallbackToRelay != nil {
 						dt.cb.OnFallbackToRelay(senderDID)
@@ -309,7 +309,7 @@ func (dt *DirectTransport) openPunchSocket() error {
 	conn.SetReadBuffer(ReadBufferSize)
 	conn.SetWriteBuffer(ReadBufferSize)
 	dt.conn = conn
-	fmt.Printf("[XTP] 🔌 Socket de punch abierto en %s\n", conn.LocalAddr().String())
+	Debugf("[XTP] 🔌 Socket de punch abierto en %s\n", conn.LocalAddr().String())
 	return nil
 }
 
@@ -346,7 +346,7 @@ func (dt *DirectTransport) punch(peerPubX *[32]byte) error {
 			dt.punching = false
 			dt.mu.Unlock()
 			dt.fsm.Send(EvPunchFailed, map[string]interface{}{"peer": dt.peerDID})
-			fmt.Printf("[XTP] ❌ Hole punching falló con %s (timeout %s)\n",
+			Debugf("[XTP] ❌ Hole punching falló con %s (timeout %s)\n",
 				dt.peerDID[:20]+"...", PunchTimeout)
 			if dt.cb.OnFallbackToRelay != nil {
 				dt.cb.OnFallbackToRelay(dt.peerDID)
@@ -361,7 +361,7 @@ func (dt *DirectTransport) punch(peerPubX *[32]byte) error {
 			dt.mu.Unlock()
 
 			if !punching {
-				fmt.Printf("[XTP] ✅ Hole punching exitoso con %s\n", peerDID[:20]+"...")
+				Debugf("[XTP] ✅ Hole punching exitoso con %s\n", peerDID[:20]+"...")
 				dt.fsm.Send(EvPunchComplete, map[string]interface{}{
 					"peer": peerDID,
 					"addr": peerAddr.String(),
@@ -426,7 +426,7 @@ func (dt *DirectTransport) noiseHandshake(peerPubX *[32]byte) error {
 			dt.fsm.Send(EvNoiseFailed, map[string]interface{}{"peer": dt.peerDID, "err": err})
 			return fmt.Errorf("enviando handshake Noise: %w", err)
 		}
-		fmt.Printf("[XTP] 📤 Noise IK msg 1 → %s\n", dt.peerDID[:20]+"...")
+		Debugf("[XTP] 📤 Noise IK msg 1 → %s\n", dt.peerDID[:20]+"...")
 	}
 
 	deadline := time.After(HandshakeTimeout)
@@ -456,7 +456,7 @@ func (dt *DirectTransport) noiseHandshake(peerPubX *[32]byte) error {
 func (dt *DirectTransport) sendPunchPackets() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("[XTP] ⚠️ Panic en sendPunchPackets: %v\n", r)
+			Debugf("[XTP] ⚠️ Panic en sendPunchPackets: %v\n", r)
 		}
 	}()
 	ticker := time.NewTicker(PunchInterval)
@@ -497,7 +497,7 @@ func buildPunchPacket(token, did string) []byte {
 func (dt *DirectTransport) readLoop() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("[XTP] ⚠️ Panic en readLoop: %v\n", r)
+			Debugf("[XTP] ⚠️ Panic en readLoop: %v\n", r)
 		}
 	}()
 	buf := make([]byte, ReadBufferSize)
@@ -550,7 +550,7 @@ func (dt *DirectTransport) readLoop() {
 		case PktKeepaliveAck:
 			// lastRecv ya se actualizó
 		case PktClose:
-			fmt.Printf("[XTP] 🔒 Peer %s cerró la sesión\n", dt.peerDID[:20]+"...")
+			Debugf("[XTP] 🔒 Peer %s cerró la sesión\n", dt.peerDID[:20]+"...")
 			dt.Close()
 			return
 		}
@@ -582,7 +582,7 @@ func (dt *DirectTransport) handlePunchPacket(payload []byte, remoteAddr *net.UDP
 		dt.peerAddr = remoteAddr
 		dt.mu.Unlock()
 
-		fmt.Printf("[XTP] 👊 Punch recibido de %s (%s)\n",
+		Debugf("[XTP] 👊 Punch recibido de %s (%s)\n",
 			peerDID[:20]+"...", remoteAddr.String())
 
 		if conn != nil {
@@ -604,7 +604,7 @@ func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 
 	if session == nil {
 		if identity == nil {
-			fmt.Printf("[XTP] ⚠️ Noise recibido sin identidad configurada\n")
+			Debugf("[XTP] ⚠️ Noise recibido sin identidad configurada\n")
 			return
 		}
 
@@ -618,7 +618,7 @@ func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 		var err error
 		session, err = NewSession(false, identity, peerDID, sessionPubX)
 		if err != nil {
-			fmt.Printf("[XTP] ❌ Error creando sesión Noise (respondedor): %v\n", err)
+			Debugf("[XTP] ❌ Error creando sesión Noise (respondedor): %v\n", err)
 			return
 		}
 
@@ -629,18 +629,18 @@ func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 
 	response, completed, err := session.HandleMessage(payload)
 	if err != nil {
-		fmt.Printf("[XTP] ❌ Error en Noise handshake: %v\n", err)
+		Debugf("[XTP] ❌ Error en Noise handshake: %v\n", err)
 		return
 	}
 
 	if response != nil && conn != nil && peerAddr != nil {
 		pkt := append([]byte{byte(PktNoise)}, response...)
 		conn.WriteToUDP(pkt, peerAddr)
-		fmt.Printf("[XTP] 📤 Noise IK msg 2 → %s\n", peerDID[:20]+"...")
+		Debugf("[XTP] 📤 Noise IK msg 2 → %s\n", peerDID[:20]+"...")
 	}
 
 	if completed {
-		fmt.Printf("[XTP] ✅ Noise IK completo con %s\n", peerDID[:20]+"...")
+		Debugf("[XTP] ✅ Noise IK completo con %s\n", peerDID[:20]+"...")
 		dt.onNoiseComplete()
 	}
 }
@@ -661,7 +661,7 @@ func (dt *DirectTransport) onNoiseComplete() {
 	ackMsg := fmt.Sprintf("SESSION_ACK %s %s", peerDID, myDID)
 	dt.faro.SendToFaro(ackMsg)
 
-	fmt.Printf("[XTP] 🔐 Sesión directa activa con %s (Noise IK)\n", peerDID[:20]+"...")
+	Debugf("[XTP] 🔐 Sesión directa activa con %s (Noise IK)\n", peerDID[:20]+"...")
 
 	if dt.cb.OnSessionActive != nil {
 		dt.cb.OnSessionActive(peerDID)
@@ -704,13 +704,13 @@ func (dt *DirectTransport) handleDataPacket(payload []byte) {
 	dt.mu.Unlock()
 
 	if session == nil || !session.IsActive() {
-		fmt.Printf("[XTP] ⚠️ Datos recibidos sin sesión activa\n")
+		Debugf("[XTP] ⚠️ Datos recibidos sin sesión activa\n")
 		return
 	}
 
 	plaintext, err := session.Decrypt(payload)
 	if err != nil {
-		fmt.Printf("[XTP] ❌ Error descifrando datos: %v\n", err)
+		Debugf("[XTP] ❌ Error descifrando datos: %v\n", err)
 		return
 	}
 
@@ -721,7 +721,7 @@ func (dt *DirectTransport) handleDataPacket(payload []byte) {
 	select {
 	case dt.dataChan <- plaintext:
 	default:
-		fmt.Printf("[XTP] ⚠️ Canal de datos lleno, mensaje descartado\n")
+		Debugf("[XTP] ⚠️ Canal de datos lleno, mensaje descartado\n")
 	}
 }
 
@@ -740,7 +740,7 @@ func (dt *DirectTransport) Receive(timeout time.Duration) ([]byte, error) {
 func (dt *DirectTransport) keepaliveLoop() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("[XTP] ⚠️ Panic en keepaliveLoop: %v\n", r)
+			Debugf("[XTP] ⚠️ Panic en keepaliveLoop: %v\n", r)
 		}
 	}()
 	ticker := time.NewTicker(KeepaliveInterval)
@@ -764,7 +764,7 @@ func (dt *DirectTransport) keepaliveLoop() {
 			}
 
 			if time.Since(lastRecv) > KeepaliveTimeout {
-				fmt.Printf("[XTP] 💀 Peer %s no responde hace %s, sesión muerta\n",
+				Debugf("[XTP] 💀 Peer %s no responde hace %s, sesión muerta\n",
 					peerDID[:20]+"...", time.Since(lastRecv).Round(time.Second))
 				dt.mu.Lock()
 				dt.active = false
@@ -861,7 +861,7 @@ func (dt *DirectTransport) Close() {
 		dt.cb.OnClose(dt.peerDID)
 	}
 
-	fmt.Printf("[XTP] 🔒 Transporte directo cerrado con %s\n", dt.peerDID[:20]+"...")
+	Debugf("[XTP] 🔒 Transporte directo cerrado con %s\n", dt.peerDID[:20]+"...")
 }
 
 func (dt *DirectTransport) waitForFaroSignal(signalType string, timeout time.Duration) (string, error) {

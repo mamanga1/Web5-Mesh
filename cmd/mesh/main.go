@@ -34,14 +34,11 @@ func getFaroAddr() string {
 func addPadding(payload string) string {
 	size := 50 + int(time.Now().UnixNano()%150)
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	randBuf := make([]byte, size)
+	rand.Read(randBuf)
 	padding := make([]byte, size)
 	for i := range padding {
-		randBuf := make([]byte, 1)
-		if _, err := rand.Read(randBuf); err != nil {
-			padding[i] = charset[0]
-			continue
-		}
-		padding[i] = charset[int(randBuf[0])%len(charset)]
+		padding[i] = charset[int(randBuf[i])%len(charset)]
 	}
 	return fmt.Sprintf("%s|%s", payload, string(padding))
 }

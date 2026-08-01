@@ -49,6 +49,7 @@ func completer(d prompt.Document) []prompt.Suggest {
 			{Text: "group", Description: "Gestión de grupos"},
 			{Text: "faro", Description: "Gestión de faro"},
 			{Text: "xtp", Description: "Transporte directo XTP (Noise IK)"},
+			{Text: "debug", Description: "Debug on/off"},
 			{Text: "help", Description: "Mostrar ayuda"},
 			{Text: "exit", Description: "Salir de la shell"},
 		}
@@ -664,9 +665,6 @@ func runInteractiveShell() {
 			OnFallbackToRelay: func(peerDID string) {
 				msgChan <- fmt.Sprintf("🔄 [XTP] Usando relay con %s (hole punching falló)", peerDID[:20]+"...")
 			},
-			OnStateChange: func(from, to xtp.State, event xtp.Event) {
-				fmt.Printf("[XTP] FSM: %s → %s (%s)\n", from, to, event)
-			},
 			OnError: func(context string, err error) {
 				fmt.Printf("[XTP] ⚠️ Error en %s: %v\n", context, err)
 			},
@@ -704,9 +702,6 @@ func runInteractiveShell() {
 	} else {
 		fmt.Println(" 📡 Faro: NO CONFIGURADO")
 	}
-	fmt.Println(" 🔐 XTP: transporte directo Noise IK activo")
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n", len(globalACLIndex))
 
 	cmdHistory = []string{}
 	msgHistory = make(map[string][]string)
@@ -725,7 +720,6 @@ func runInteractiveShell() {
 			msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
 			if err := sendToFaroShell(addPadding(msg)); err == nil {
 				touchActivity()
-				fmt.Println("📡 ANNOUNCE retry (3s) enviado")
 			}
 		}
 	}()
@@ -758,18 +752,26 @@ func runInteractiveShell() {
 			cmdHistory = append(cmdHistory, input)
 		}
 
+		if input == "debug on" {
+			xtp.DebugMode = true
+			fmt.Println("✅ Debug ON")
+			continue
+		}
+		if input == "debug off" {
+			xtp.DebugMode = false
+			fmt.Println("✅ Debug OFF")
+			continue
+		}
 		if input == "xtp" || input == "xtp status" {
 			if globalTM == nil {
 				fmt.Println("❌ TransportManager no inicializado")
 				continue
 			}
 			stats := globalTM.Stats()
-			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			fmt.Println(" 📊 XTP Transport Manager")
 			fmt.Printf(" Estado FSM: %s\n", stats.FSMState)
 			fmt.Printf(" Sesiones directas: %d\n", stats.DirectSessions)
 			fmt.Printf(" Relay activo: %v\n", !stats.RelayClosed)
-			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			continue
 		}
 

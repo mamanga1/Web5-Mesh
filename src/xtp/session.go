@@ -209,7 +209,7 @@ func (s *Session) HandleMessage(msg []byte) (response []byte, completed bool, er
 				go func() {
 					defer func() {
 						if r := recover(); r != nil {
-							fmt.Printf("[XTP] ⚠️ Panic en onActivate (iniciador): %v\n", r)
+							Debugf("[XTP] ⚠️ Panic en onActivate (iniciador): %v\n", r)
 						}
 					}()
 					cb(peerDID)
@@ -248,7 +248,7 @@ func (s *Session) HandleMessage(msg []byte) (response []byte, completed bool, er
 			go func() {
 				defer func() {
 					if r := recover(); r != nil {
-						fmt.Printf("[XTP] ⚠️ Panic en onActivate (respondedor): %v\n", r)
+						Debugf("[XTP] ⚠️ Panic en onActivate (respondedor): %v\n", r)
 					}
 				}()
 				cb(peerDID)
@@ -325,7 +325,7 @@ func (s *Session) maybeRekeyLocked() {
 		s.sendCount = 0
 		s.recvCount = 0
 
-		fmt.Printf("[XTP] 🔑 Rekey con %s (después de %d msg / %s)\n",
+		Debugf("[XTP] 🔑 Rekey con %s (después de %d msg / %s)\n",
 			s.peerDID[:20]+"...", total, uptime)
 	}
 }
@@ -404,14 +404,14 @@ func (s *Session) Close() {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("[XTP] ⚠️ Panic en onClose: %v\n", r)
+					Debugf("[XTP] ⚠️ Panic en onClose: %v\n", r)
 				}
 			}()
 			cb(peerDID)
 		}()
 	}
 
-	fmt.Printf("[XTP] 🔒 Sesión cerrada con %s\n", s.peerDID[:20]+"...")
+	Debugf("[XTP] 🔒 Sesión cerrada con %s\n", s.peerDID[:20]+"...")
 }
 
 // OnActivate registra un callback que se llama cuando la sesión se activa.
