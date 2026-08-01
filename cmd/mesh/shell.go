@@ -23,6 +23,10 @@ import (
 	"web5-mesh/src/xtp"
 )
 
+// ============================================================================
+// RESTAURAR TERMINAL
+// ============================================================================
+
 func restoreTerminal() {
 	fmt.Print("\x1b[?12l")
 	fmt.Print("\x1b[?25h")
@@ -37,6 +41,10 @@ func restoreTerminal() {
 	_ = cmd.Run()
 }
 
+// ============================================================================
+// COMPLETER
+// ============================================================================
+
 func completer(d prompt.Document) []prompt.Suggest {
 	text := d.TextBeforeCursor()
 	words := strings.Fields(text)
@@ -49,6 +57,7 @@ func completer(d prompt.Document) []prompt.Suggest {
 			{Text: "group", Description: "Gestión de grupos"},
 			{Text: "faro", Description: "Gestión de faro"},
 			{Text: "xtp", Description: "Transporte directo XTP (Noise IK)"},
+			{Text: "debug", Description: "Debug on/off (logs internos)"},
 			{Text: "help", Description: "Mostrar ayuda"},
 			{Text: "exit", Description: "Salir de la shell"},
 		}
@@ -94,17 +103,25 @@ func completer(d prompt.Document) []prompt.Suggest {
 				{Text: "status", Description: "Estado del transporte XTP"},
 			}
 		}
+	case "debug":
+		if len(words) == 1 {
+			return []prompt.Suggest{
+				{Text: "on", Description: "Activar logs internos (FSM, XTP)"},
+				{Text: "off", Description: "Desactivar logs internos"},
+			}
+		}
 	}
 
 	s := []prompt.Suggest{}
 	allCommands := []string{
-		"whoami", "acl", "alias", "group", "faro", "xtp", "help", "exit",
+		"whoami", "acl", "alias", "group", "faro", "xtp", "debug", "help", "exit",
 		"acl add", "acl import", "acl remove", "acl list", "acl clear",
 		"alias add", "alias remove", "alias list",
 		"group create", "group list", "group send", "group add", "group remove",
 		"group invite", "group kick", "group leave", "group delete", "group info",
 		"faro set", "faro reset",
 		"xtp status",
+		"debug on", "debug off",
 	}
 
 	for _, cmd := range allCommands {
@@ -116,20 +133,40 @@ func completer(d prompt.Document) []prompt.Suggest {
 	return s
 }
 
+// ============================================================================
+// VARIABLES GLOBALES
+// ============================================================================
+
 var (
-	globalConn     *net.UDPConn
-	globalConnWS   *websocket.Conn
-	globalUseWS    bool
-	globalACLIndex map[[4]byte]peerKeys
-	globalID       *crypto.Identity
-	globalFaroAddr string
-	globalQuit     chan struct{}
-	msgChan        = make(chan string, 100)
-	cmdHistory     []string
+	globalConn      *net.UDPConn
+	globalConnWS    *websocket.Conn
+	globalUseWS     bool
+	globalACLIndex  map[[4]byte]peerKeys
+	globalID        *crypto.Identity
+	globalFaroAddr  string
+	globalQuit      chan struct{}
+	msgChan         = make(chan string, 100)
+	cmdHistory      []string
 	activeRecipient string
 	msgHistory      map[string][]string
 	lastPublicIP    string
 )
+
+// ============================================================================
+// FIX #15: DEBUG MODE
+// ============================================================================
+
+var debugMode bool
+
+func debugf(format string, args ...interface{}) {
+	if debugMode {
+		fmt.Printf("\x1b[2m"+format+"\x1b[0m\n", args...)
+	}
+}
+
+// ============================================================================
+// ACTIVIDAD (para watchdog de reconexión)
+// ============================================================================
 
 var (
 	activityMu   sync.Mutex
@@ -150,6 +187,10 @@ func staleSince() time.Duration {
 	}
 	return time.Since(lastActivity)
 }
+
+// ============================================================================
+// XTP: TRANSPORT MANAGER (Fase 2)
+// ============================================================================
 
 var globalTM *xtp.TransportManager
 
@@ -172,13 +213,17 @@ func buildXTPACLIndex() map[[4]byte]xtp.PeerKeys {
 	return idx
 }
 
+// ============================================================================
+// isCommand
+// ============================================================================
+
 func isCommand(input string) bool {
 	known := []string{
 		"whoami", "acl", "alias", "group", "faro", "help", "exit",
 		"clear", "import", "export", "sign", "verify", "ls", "cat",
 		"mkdir", "rm", "pwd", "touch", "edit", "mv", "cp", "rmdir",
 		"chat", "ia", "browse", "host", "sync", "proxy",
-		"xtp",
+		"xtp", "debug",
 	}
 	words := strings.Fields(input)
 	if len(words) == 0 {
@@ -193,6 +238,10 @@ func isCommand(input string) bool {
 	}
 	return false
 }
+
+// ============================================================================
+// CONEXIÓN AL FARO
+// ============================================================================
 
 func connectToFaroShell() error {
 	if globalFaroAddr == "" {
@@ -219,7 +268,6 @@ func connectToFaroShell() error {
 	return fmt.Errorf("sin ruta al faro %s", globalFaroAddr)
 }
 
-// FIX: udp4 en vez de udp
 func connectUDPShell(addr string) error {
 	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
@@ -331,6 +379,10 @@ func readFromFaroShell() (string, error) {
 	return string(buf[:n]), nil
 }
 
+// ============================================================================
+// LISTENER + ROAMING
+// ============================================================================
+
 func startNetworkListener() {
 	defer func() {
 		if r := recover(); r != nil {
@@ -371,16 +423,18 @@ func startNetworkListener() {
 			raw = stripPadding(raw)
 			raw = extractPayload(raw)
 
+			// XTP: Rutear al TransportManager (signaling o relay)
 			if globalTM != nil && globalTM.HandleIncoming(raw) {
 				continue
 			}
 
+			// === ACK_IP: Roaming ===
 			if strings.HasPrefix(raw, "ACK_IP ") {
 				parts := strings.SplitN(raw, " ", 2)
 				if len(parts) == 2 {
 					currentPublicIP := parts[1]
 					if lastPublicIP != "" && lastPublicIP != currentPublicIP {
-						fmt.Printf("🔄 IP pública cambió: %s → %s\n", lastPublicIP, currentPublicIP)
+						debugf("🔄 IP pública cambió: %s → %s", lastPublicIP, currentPublicIP)
 						ts := fmt.Sprintf("%d", time.Now().Unix())
 						sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
 						msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
@@ -499,6 +553,10 @@ func startNetworkListener() {
 	}
 }
 
+// ============================================================================
+// ANNOUNCE LOOP (silencioso por defecto)
+// ============================================================================
+
 func startAnnounceLoop() {
 	for globalConn == nil && globalConnWS == nil {
 		select {
@@ -527,6 +585,10 @@ func startAnnounceLoop() {
 		}
 	}
 }
+
+// ============================================================================
+// WATCHDOG
+// ============================================================================
 
 func startWatchdog() {
 	ticker := time.NewTicker(10 * time.Second)
@@ -564,6 +626,10 @@ func startWatchdog() {
 		}
 	}
 }
+
+// ============================================================================
+// SHELL PRINCIPAL
+// ============================================================================
 
 func runInteractiveShell() {
 	var err error
@@ -645,18 +711,19 @@ func runInteractiveShell() {
 				msgChan <- fmt.Sprintf("💀 [XTP] Sesión directa perdida con %s", peerDID[:20]+"...")
 			},
 			OnFallbackToRelay: func(peerDID string) {
-				msgChan <- fmt.Sprintf("🔄 [XTP] Usando relay con %s (hole punching falló)", peerDID[:20]+"...")
+				debugf("🔄 [XTP] Usando relay con %s (hole punching falló)", peerDID[:20]+"...")
 			},
 			OnStateChange: func(from, to xtp.State, event xtp.Event) {
-				fmt.Printf("[XTP] FSM: %s → %s (%s)\n", from, to, event)
+				debugf("[XTP] FSM: %s → %s (%s)", from, to, event)
 			},
 			OnError: func(context string, err error) {
-				fmt.Printf("[XTP] ⚠️ Error en %s: %v\n", context, err)
+				debugf("[XTP] ⚠️ Error en %s: %v", context, err)
 			},
 		},
 		xtp.DefaultManagerConfig(),
 	)
 
+	// XTP: Notificar al FSM que el faro está conectado
 	if globalTM != nil {
 		globalTM.FSM().Send(xtp.EvConnectFaro, nil)
 		if err == nil {
@@ -673,11 +740,11 @@ func runInteractiveShell() {
 	pubEdHex := hex.EncodeToString(globalID.PubKeyEd)
 	pubXHex := hex.EncodeToString(globalID.PubKeyX[:])
 	fmt.Println(" PubKey Ed: " + pubEdHex)
-	fmt.Println(" PubKey X: " + pubXHex)
+	fmt.Println(" PubKey X:  " + pubXHex)
 	fmt.Println()
 	fmt.Println(" 📋 Para que otro nodo te agregue, decile que ejecute:")
-	fmt.Printf(" acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
-	fmt.Printf(" alias add %s\n", globalID.DID)
+	fmt.Printf("   acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
+	fmt.Printf("   alias add  %s\n", globalID.DID)
 	fmt.Println()
 	if globalFaroAddr != "" {
 		if globalUseWS {
@@ -689,6 +756,7 @@ func runInteractiveShell() {
 		fmt.Println(" 📡 Faro: NO CONFIGURADO")
 	}
 	fmt.Println(" 🔐 XTP: transporte directo Noise IK activo")
+	fmt.Println(" 🔇 Debug: OFF (usá 'debug on' para ver logs internos)")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n\n", len(globalACLIndex))
 
@@ -699,6 +767,7 @@ func runInteractiveShell() {
 	go startAnnounceLoop()
 	go startWatchdog()
 
+	// ANNOUNCE retry a los 3s (silencioso por defecto)
 	go func() {
 		select {
 		case <-globalQuit:
@@ -709,15 +778,28 @@ func runInteractiveShell() {
 			msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
 			if err := sendToFaroShell(addPadding(msg)); err == nil {
 				touchActivity()
-				fmt.Println("📡 ANNOUNCE retry (3s) enviado")
+				debugf("📡 ANNOUNCE retry (3s) enviado")
 			}
 		}
 	}()
 
+	// ========================================================================
+	// FIX #15: Chat en VERDE BOLD, sistema en gris dim
+	// ========================================================================
 	go func() {
 		for msg := range msgChan {
 			fmt.Print("\r\x1b[K")
-			fmt.Println(msg)
+			if strings.HasPrefix(msg, "💬") {
+				// Chat: verde bold con aire
+				fmt.Printf("\n\x1b[1;32m%s\x1b[0m\n\n", msg)
+			} else if strings.HasPrefix(msg, "🔐") || strings.HasPrefix(msg, "💀") ||
+				strings.HasPrefix(msg, "🔄") || strings.HasPrefix(msg, "🗑️") ||
+				strings.HasPrefix(msg, "👢") || strings.HasPrefix(msg, "👋") {
+				// Sistema/XTP: gris dim
+				fmt.Printf("\x1b[2m%s\x1b[0m\n", msg)
+			} else {
+				fmt.Println(msg)
+			}
 			fmt.Print("xion@nodo:~$ ")
 		}
 	}()
@@ -742,6 +824,25 @@ func runInteractiveShell() {
 			cmdHistory = append(cmdHistory, input)
 		}
 
+		// ============================================================
+		// FIX #15: DEBUG ON/OFF
+		// ============================================================
+		if input == "debug on" {
+			debugMode = true
+			xtp.XTPDebug = true
+			fmt.Println("🔧 Debug ON — se muestra todo el ruido interno (FSM, XTP)")
+			continue
+		}
+		if input == "debug off" {
+			debugMode = false
+			xtp.XTPDebug = false
+			fmt.Println("🔇 Debug OFF — solo mensajes de chat y eventos importantes")
+			continue
+		}
+
+		// ============================================================
+		// XTP STATUS
+		// ============================================================
 		if input == "xtp" || input == "xtp status" {
 			if globalTM == nil {
 				fmt.Println("❌ TransportManager no inicializado")
@@ -750,13 +851,16 @@ func runInteractiveShell() {
 			stats := globalTM.Stats()
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			fmt.Println(" 📊 XTP Transport Manager")
-			fmt.Printf(" Estado FSM: %s\n", stats.FSMState)
-			fmt.Printf(" Sesiones directas: %d\n", stats.DirectSessions)
-			fmt.Printf(" Relay activo: %v\n", !stats.RelayClosed)
+			fmt.Printf("    Estado FSM: %s\n", stats.FSMState)
+			fmt.Printf("    Sesiones directas: %d\n", stats.DirectSessions)
+			fmt.Printf("    Relay activo: %v\n", !stats.RelayClosed)
 			fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 			continue
 		}
 
+		// ============================================================
+		// XTP SEND
+		// ============================================================
 		if strings.HasPrefix(input, "xtp ") {
 			parts := strings.SplitN(input, " ", 3)
 			if len(parts) == 3 {
@@ -780,12 +884,16 @@ func runInteractiveShell() {
 					fmt.Printf("📤 Enviado por %s → %s\n", transport, targetDID[:20]+"...")
 				}
 			} else {
-				fmt.Println("Uso: xtp <did|alias> <mensaje>")
+				fmt.Println("Uso: xtp <alias|DID> <mensaje>")
 				fmt.Println("Ejemplo: xtp juan hola mundo")
+				fmt.Println("El transporte (directo Noise IK o relay) se elige automáticamente.")
 			}
 			continue
 		}
 
+		// ============================================================
+		// /to
+		// ============================================================
 		if strings.HasPrefix(input, "/to ") {
 			parts := strings.SplitN(input, " ", 3)
 			if len(parts) == 2 {
@@ -799,7 +907,7 @@ func runInteractiveShell() {
 					if history, ok := msgHistory[alias]; ok && len(history) > 0 {
 						fmt.Printf("📜 Historial de mensajes con grupo '%s':\n", alias)
 						for i, msg := range history {
-							fmt.Printf(" %d. %s\n", i+1, msg)
+							fmt.Printf("  %d. %s\n", i+1, msg)
 						}
 					}
 					fmt.Printf("📡 Modo grupo '%s'. Escribí y dale Enter.\n", alias)
@@ -808,7 +916,7 @@ func runInteractiveShell() {
 					if history, ok := msgHistory[target]; ok && len(history) > 0 {
 						fmt.Printf("📜 Historial de mensajes con '%s':\n", target)
 						for i, msg := range history {
-							fmt.Printf(" %d. %s\n", i+1, msg)
+							fmt.Printf("  %d. %s\n", i+1, msg)
 						}
 					}
 					fmt.Printf("📡 Modo chat con '%s'. Escribí y dale Enter.\n", target)
@@ -834,6 +942,9 @@ func runInteractiveShell() {
 			continue
 		}
 
+		// ============================================================
+		// MODO CONTEXTO ACTIVO
+		// ============================================================
 		if activeRecipient != "" && !isCommand(input) {
 			if strings.HasPrefix(activeRecipient, "chat:") {
 				alias := strings.TrimPrefix(activeRecipient, "chat:")

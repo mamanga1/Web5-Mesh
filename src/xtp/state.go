@@ -365,7 +365,7 @@ func (f *FSM) Send(event Event, meta map[string]interface{}) bool {
 		f.mu.Unlock()
 		// Transición inválida: loguear y ignorar (no es un error fatal,
 		// puede ser un evento duplicado o fuera de orden).
-		fmt.Printf("[FSM] ⚠️ Transición inválida: %s + %s (ignorada)\n", from, event)
+		xtpDebugf("[FSM] ⚠️ Transición inválida: %s + %s (ignorada)\n", from, event)
 		return false
 	}
 
@@ -397,7 +397,7 @@ func (f *FSM) Send(event Event, meta map[string]interface{}) bool {
 		enterCb(from, to, event, meta)
 	}
 
-	fmt.Printf("[FSM] %s → %s (%s)\n", from, to, event)
+	xtpDebugf("[FSM] %s → %s (%s)\n", from, to, event)
 	return true
 }
 
@@ -446,7 +446,7 @@ func (f *FSM) Reset() {
 	f.peerDID = ""
 	f.enteredAt = time.Now()
 	f.mu.Unlock()
-	fmt.Printf("[FSM] %s → OFFLINE (reset)\n", from)
+	xtpDebugf("[FSM] %s → OFFLINE (reset)\n", from)
 }
 
 // ElapsedInState devuelve cuánto tiempo lleva en el estado actual.

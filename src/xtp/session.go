@@ -9,42 +9,19 @@ import (
 	"web5-mesh/src/crypto"
 )
 
-// ============================================================================
-// SESSION MANAGER
-// ============================================================================
-// Maneja el ciclo de vida de una sesión Noise IK entre dos nodos:
-//
-//   1. Creación: NewSession(initiator, myIdentity, peerPubX)
-//   2. Handshake: el iniciador llama InitiatorMessage() → envía al peer.
-//      El respondedor llama HandleMessage(msg) → devuelve la respuesta.
-//      El iniciador llama HandleMessage(respuesta) → handshake completo.
-//   3. Comunicación: Encrypt(plaintext) / Decrypt(ciphertext)
-//   4. Rekey: cada 100 mensajes o cada 5 minutos (lo que llegue primero).
-//   5. Cierre: Close()
-//
-// El SessionManager es thread-safe.
-
 const (
-	// RekeyAfterMessages: rotar claves después de N mensajes.
-	// Previene el agotamiento del nonce de ChaCha20 (2^64 mensajes,
-	// pero rotamos mucho antes por seguridad).
 	RekeyAfterMessages = 100
-
-	// RekeyAfterDuration: rotar claves después de T tiempo.
 	RekeyAfterDuration = 5 * time.Minute
-
-	// HandshakeTimeout: timeout para completar el handshake Noise IK.
-	HandshakeTimeout = 10 * time.Second
+	HandshakeTimeout   = 10 * time.Second
 )
 
-// SessionState representa el estado de una sesión individual.
 type SessionState int
 
 const (
-	SessionNew          SessionState = iota // Creada, sin handshake
-	SessionHandshaking                      // Handshake en progreso
-	SessionActive                           // Handshake completo, sesión activa
-	SessionClosed                           // Sesión cerrada
+	SessionNew          SessionState = iota
+	SessionHandshaking
+	SessionActive
+	SessionClosed
 )
 
 func (s SessionState) String() string {
@@ -62,46 +39,32 @@ func (s SessionState) String() string {
 	}
 }
 
-// Session representa una sesión Noise IK con un peer específico.
 type Session struct {
 	mu sync.Mutex
 
-	// Identidad
 	myDID    string
 	peerDID  string
-	peerPubX *[32]byte // Clave pública X25519 del peer (del ACL)
+	peerPubX *[32]byte
 
-	// Noise IK
 	noise       *crypto.HandshakeState
 	isInitiator bool
 
-	// Estado
 	state       SessionState
 	createdAt   time.Time
 	activatedAt time.Time
 	lastRekeyAt time.Time
 
-	// Contadores para rekey
 	sendCount int
 	recvCount int
 
-	// Callbacks (opcionales)
 	onActivate func(peerDID string)
 	onClose    func(peerDID string)
 }
 
-// NewSession crea una nueva sesión Noise IK con un peer.
-//
-// Para el INICIADOR: peerPubX es la clave pública X25519 del peer
-// (se obtiene del ACL con acl.GetPeerKeys(peerDID)).
-//
-// Para el RESPONDEDOR: peerPubX puede ser nil (Noise IK la recibe
-// del iniciador durante el handshake).
 func NewSession(isInitiator bool, myIdentity *crypto.Identity, peerDID string, peerPubX *[32]byte) (*Session, error) {
 	var myPrivX *[32]byte
 	var myPubX *[32]byte
 
-	// Extraer claves X25519 de la identidad
 	privX := new([32]byte)
 	copy(privX[:], myIdentity.PrivKeyX[:])
 	myPrivX = privX
@@ -126,17 +89,6 @@ func NewSession(isInitiator bool, myIdentity *crypto.Identity, peerDID string, p
 	}, nil
 }
 
-// ============================================================================
-// HANDSHAKE
-// ============================================================================
-
-// InitiatorMessage genera el primer mensaje del handshake (solo para el iniciador).
-// Este mensaje se envía al peer a través del canal directo (hole punching)
-// o a través del faro (relay fallback).
-//
-// Flujo del patrón IK (2 mensajes):
-//   1. Iniciador → Respondedor: e, es, s, ss  (este método)
-//   2. Respondedor → Iniciador: e, ee, se     (HandleMessage del iniciador)
 func (s *Session) InitiatorMessage() ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -148,7 +100,6 @@ func (s *Session) InitiatorMessage() ([]byte, error) {
 		return nil, fmt.Errorf("sesión en estado %s, esperado NEW", s.state)
 	}
 
-	// Payload del primer mensaje: metadata de la sesión
 	meta := sessionMeta{
 		FromDID:   s.myDID,
 		Timestamp: time.Now().Unix(),
@@ -162,23 +113,11 @@ func (s *Session) InitiatorMessage() ([]byte, error) {
 	}
 
 	s.state = SessionHandshaking
-
-	// En IK, el handshake termina después del mensaje 2 (del respondedor).
-	// El mensaje 1 del iniciador NO completa el handshake.
 	_ = completed
 
 	return msg, nil
 }
 
-// HandleMessage procesa un mensaje de handshake del peer.
-//
-// Para el RESPONDEDOR: recibe el mensaje 1 del iniciador, devuelve el mensaje 2.
-// Para el INICIADOR: recibe el mensaje 2 del respondedor, handshake completo.
-//
-// Retorna:
-//   - response: el mensaje de respuesta (nil si el handshake se completó)
-//   - completed: true si el handshake terminó (la sesión está activa)
-//   - err: error si algo falló
 func (s *Session) HandleMessage(msg []byte) (response []byte, completed bool, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,7 +127,6 @@ func (s *Session) HandleMessage(msg []byte) (response []byte, completed bool, er
 	}
 
 	if s.isInitiator {
-		// Iniciador: recibe el mensaje 2 del respondedor → handshake completo
 		_, done, err := s.noise.ReadHandshake(msg)
 		if err != nil {
 			return nil, false, fmt.Errorf("leyendo handshake (iniciador): %w", err)
@@ -206,13 +144,11 @@ func (s *Session) HandleMessage(msg []byte) (response []byte, completed bool, er
 		return nil, done, nil
 	}
 
-	// Respondedor: recibe el mensaje 1 del iniciador → genera el mensaje 2
 	_, _, err = s.noise.ReadHandshake(msg)
 	if err != nil {
 		return nil, false, fmt.Errorf("leyendo handshake (respondedor): %w", err)
 	}
 
-	// Generar respuesta (mensaje 2)
 	resp, done, err := s.noise.WriteHandshake(nil)
 	if err != nil {
 		return nil, false, fmt.Errorf("escribiendo handshake (respondedor): %w", err)
@@ -235,11 +171,21 @@ func (s *Session) HandleMessage(msg []byte) (response []byte, completed bool, er
 }
 
 // ============================================================================
+// FIX #1 (parte 2): PeerStatic — para que el respondedor verifique identidad
+// ============================================================================
+
+// PeerStatic retorna la clave pública estática del peer verificada por Noise.
+// Solo válido después del handshake completo.
+func (s *Session) PeerStatic() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.noise.PeerStatic()
+}
+
+// ============================================================================
 // COMUNICACIÓN (post-handshake)
 // ============================================================================
 
-// Encrypt cifra un mensaje saliente usando Noise IK.
-// Incluye rekey automático después de N mensajes o T tiempo.
 func (s *Session) Encrypt(plaintext []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -248,7 +194,6 @@ func (s *Session) Encrypt(plaintext []byte) ([]byte, error) {
 		return nil, fmt.Errorf("sesión no activa (estado: %s)", s.state)
 	}
 
-	// Verificar si hay que hacer rekey
 	s.maybeRekeyLocked()
 
 	ciphertext, err := s.noise.Encrypt(plaintext)
@@ -260,7 +205,10 @@ func (s *Session) Encrypt(plaintext []byte) ([]byte, error) {
 	return ciphertext, nil
 }
 
-// Decrypt descifra un mensaje entrante usando Noise IK.
+// ============================================================================
+// FIX #2: rekey simétrico — Decrypt también verifica rekey
+// ============================================================================
+
 func (s *Session) Decrypt(ciphertext []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -268,6 +216,9 @@ func (s *Session) Decrypt(ciphertext []byte) ([]byte, error) {
 	if s.state != SessionActive {
 		return nil, fmt.Errorf("sesión no activa (estado: %s)", s.state)
 	}
+
+	// FIX #2: rekey simétrico — ambos lados rotan al mismo contador total
+	s.maybeRekeyLocked()
 
 	plaintext, err := s.noise.Decrypt(ciphertext)
 	if err != nil {
@@ -278,8 +229,10 @@ func (s *Session) Decrypt(ciphertext []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-// maybeRekeyLocked rota las claves si se superó el límite de mensajes o tiempo.
-// DEBE llamarse con s.mu tomado.
+// ============================================================================
+// FIX logging: guardar total ANTES de resetear
+// ============================================================================
+
 func (s *Session) maybeRekeyLocked() {
 	needRekey := false
 
@@ -291,12 +244,13 @@ func (s *Session) maybeRekeyLocked() {
 	}
 
 	if needRekey {
+		total := s.sendCount + s.recvCount // ← guardar ANTES de resetear
 		s.noise.Rekey()
 		s.lastRekeyAt = time.Now()
 		s.sendCount = 0
 		s.recvCount = 0
 		fmt.Printf("[XTP] 🔑 Rekey con %s (después de %d msg / %s)\n",
-			s.peerDID[:20]+"...", s.sendCount+s.recvCount,
+			s.peerDID[:20]+"...", total,
 			time.Since(s.activatedAt).Round(time.Second))
 	}
 }
@@ -305,31 +259,26 @@ func (s *Session) maybeRekeyLocked() {
 // CICLO DE VIDA
 // ============================================================================
 
-// State devuelve el estado actual de la sesión.
 func (s *Session) State() SessionState {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state
 }
 
-// IsActive devuelve true si la sesión está activa (handshake completo).
 func (s *Session) IsActive() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.state == SessionActive
 }
 
-// PeerDID devuelve el DID del peer.
 func (s *Session) PeerDID() string {
 	return s.peerDID
 }
 
-// IsInitiator devuelve true si este nodo es el iniciador de la sesión.
 func (s *Session) IsInitiator() bool {
 	return s.isInitiator
 }
 
-// Stats devuelve estadísticas de la sesión.
 func (s *Session) Stats() SessionStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -358,7 +307,6 @@ type SessionStats struct {
 	Uptime      time.Duration `json:"uptime"`
 }
 
-// Close cierra la sesión.
 func (s *Session) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -374,26 +322,18 @@ func (s *Session) Close() {
 	fmt.Printf("[XTP] 🔒 Sesión cerrada con %s\n", s.peerDID[:20]+"...")
 }
 
-// OnActivate registra un callback que se llama cuando la sesión se activa.
 func (s *Session) OnActivate(cb func(peerDID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onActivate = cb
 }
 
-// OnClose registra un callback que se llama cuando la sesión se cierra.
 func (s *Session) OnClose(cb func(peerDID string)) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.onClose = cb
 }
 
-// ============================================================================
-// METADATA DEL HANDSHAKE
-// ============================================================================
-
-// sessionMeta se incluye como payload en el primer mensaje del handshake.
-// Permite al respondedor saber quién está iniciando la sesión y cuándo.
 type sessionMeta struct {
 	FromDID   string `json:"from_did"`
 	Timestamp int64  `json:"ts"`
@@ -401,15 +341,13 @@ type sessionMeta struct {
 }
 
 // ============================================================================
-// SESSION MANAGER (gestiona múltiples sesiones)
+// SESSION MANAGER
 // ============================================================================
 
-// Manager gestiona todas las sesiones activas de un nodo.
-// Un nodo puede tener múltiples sesiones simultáneas (una por peer).
 type Manager struct {
 	mu       sync.RWMutex
 	identity *crypto.Identity
-	sessions map[string]*Session // peerDID → Session
+	sessions map[string]*Session
 }
 
 func NewManager(identity *crypto.Identity) *Manager {
@@ -419,13 +357,10 @@ func NewManager(identity *crypto.Identity) *Manager {
 	}
 }
 
-// CreateSession crea una nueva sesión con un peer.
-// Si ya existe una sesión activa con ese peer, la cierra y crea una nueva.
 func (m *Manager) CreateSession(isInitiator bool, peerDID string, peerPubX *[32]byte) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Si ya hay una sesión con este peer, cerrarla
 	if existing, ok := m.sessions[peerDID]; ok {
 		existing.Close()
 	}
@@ -439,14 +374,12 @@ func (m *Manager) CreateSession(isInitiator bool, peerDID string, peerPubX *[32]
 	return session, nil
 }
 
-// GetSession devuelve la sesión con un peer (nil si no existe).
 func (m *Manager) GetSession(peerDID string) *Session {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.sessions[peerDID]
 }
 
-// GetOrCreateSession devuelve la sesión existente o crea una nueva.
 func (m *Manager) GetOrCreateSession(isInitiator bool, peerDID string, peerPubX *[32]byte) (*Session, error) {
 	m.mu.RLock()
 	session, exists := m.sessions[peerDID]
@@ -459,7 +392,6 @@ func (m *Manager) GetOrCreateSession(isInitiator bool, peerDID string, peerPubX 
 	return m.CreateSession(isInitiator, peerDID, peerPubX)
 }
 
-// CloseSession cierra y elimina la sesión con un peer.
 func (m *Manager) CloseSession(peerDID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -470,7 +402,6 @@ func (m *Manager) CloseSession(peerDID string) {
 	}
 }
 
-// CloseAll cierra todas las sesiones.
 func (m *Manager) CloseAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -481,7 +412,6 @@ func (m *Manager) CloseAll() {
 	}
 }
 
-// ActiveSessions devuelve el número de sesiones activas.
 func (m *Manager) ActiveSessions() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -495,7 +425,6 @@ func (m *Manager) ActiveSessions() int {
 	return count
 }
 
-// ListSessions devuelve estadísticas de todas las sesiones.
 func (m *Manager) ListSessions() []SessionStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -507,8 +436,6 @@ func (m *Manager) ListSessions() []SessionStats {
 	return stats
 }
 
-// Encrypt cifra un mensaje para un peer específico.
-// Busca la sesión activa con ese peer y cifra con Noise IK.
 func (m *Manager) Encrypt(peerDID string, plaintext []byte) ([]byte, error) {
 	session := m.GetSession(peerDID)
 	if session == nil {
@@ -517,7 +444,6 @@ func (m *Manager) Encrypt(peerDID string, plaintext []byte) ([]byte, error) {
 	return session.Encrypt(plaintext)
 }
 
-// Decrypt descifra un mensaje de un peer específico.
 func (m *Manager) Decrypt(peerDID string, ciphertext []byte) ([]byte, error) {
 	session := m.GetSession(peerDID)
 	if session == nil {

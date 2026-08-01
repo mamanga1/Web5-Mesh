@@ -1,6 +1,7 @@
 package xtp
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -92,6 +93,10 @@ type DirectTransport struct {
 
 	punchToken string
 
+	// FIX #1: clave pública X25519 esperada del peer (del ACL).
+	// El respondedor la verifica contra PeerStatic() después del handshake.
+	expectedPeerPubX *[32]byte
+
 	punching bool
 	active   bool
 	closed   bool
@@ -120,6 +125,17 @@ func (dt *DirectTransport) SetIdentity(identity *crypto.Identity) {
 	dt.identity = identity
 }
 
+// ============================================================================
+// FIX #1: SetExpectedPeerPubX — el manager llama esto para que el respondedor
+// pueda verificar la identidad del iniciador después del handshake Noise.
+// ============================================================================
+
+func (dt *DirectTransport) SetExpectedPeerPubX(pubX *[32]byte) {
+	dt.mu.Lock()
+	defer dt.mu.Unlock()
+	dt.expectedPeerPubX = pubX
+}
+
 func (dt *DirectTransport) OpenSession(peerDID string, peerPubX *[32]byte) error {
 	dt.mu.Lock()
 	if dt.closed {
@@ -131,6 +147,7 @@ func (dt *DirectTransport) OpenSession(peerDID string, peerPubX *[32]byte) error
 		return fmt.Errorf("identidad no configurada (llamar SetIdentity antes)")
 	}
 	dt.peerDID = peerDID
+	dt.expectedPeerPubX = peerPubX // FIX #1: el iniciador ya conoce la clave del peer
 	dt.mu.Unlock()
 
 	dt.fsm.SetPeerDID(peerDID)
@@ -244,10 +261,29 @@ func (dt *DirectTransport) HandleIncomingSession(raw string) error {
 	dt.punching = true
 	dt.mu.Unlock()
 
-	go dt.readLoop()
-	go dt.sendPunchPackets()
-
+	// FIX #7: recover en goroutines (un panic en cgo mata la app entera)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[XTP] ⚠️ Panic recuperado en readLoop: %v\n", r)
+			}
+		}()
+		dt.readLoop()
+	}()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[XTP] ⚠️ Panic recuperado en sendPunchPackets: %v\n", r)
+			}
+		}()
+		dt.sendPunchPackets()
+	}()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[XTP] ⚠️ Panic recuperado en watcher: %v\n", r)
+			}
+		}()
 		deadline := time.After(PunchTimeout + HandshakeTimeout)
 		ticker := time.NewTicker(200 * time.Millisecond)
 		defer ticker.Stop()
@@ -311,8 +347,23 @@ func (dt *DirectTransport) punch(peerPubX *[32]byte) error {
 
 	dt.fsm.Send(EvStartPunch, map[string]interface{}{"peer": dt.peerDID})
 
-	go dt.readLoop()
-	go dt.sendPunchPackets()
+	// FIX #7: recover en goroutines
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[XTP] ⚠️ Panic recuperado en readLoop: %v\n", r)
+			}
+		}()
+		dt.readLoop()
+	}()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[XTP] ⚠️ Panic recuperado en sendPunchPackets: %v\n", r)
+			}
+		}()
+		dt.sendPunchPackets()
+	}()
 
 	dt.mu.Lock()
 	localAddr := ""
@@ -353,11 +404,20 @@ func (dt *DirectTransport) punch(peerPubX *[32]byte) error {
 			dt.mu.Unlock()
 
 			if !punching {
-				fmt.Printf("[XTP] ✅ Hole punching exitoso con %s\n", dt.peerDID[:20]+"...")
+				// FIX #6: leer peerAddr con lock (data race con handlePunchPacket)
+				dt.mu.Lock()
+				peerAddrStr := ""
+				if dt.peerAddr != nil {
+					peerAddrStr = dt.peerAddr.String()
+				}
+				peerDID := dt.peerDID
+				dt.mu.Unlock()
+
+				fmt.Printf("[XTP] ✅ Hole punching exitoso con %s\n", peerDID[:20]+"...")
 
 				dt.fsm.Send(EvPunchComplete, map[string]interface{}{
-					"peer": dt.peerDID,
-					"addr": dt.peerAddr.String(),
+					"peer": peerDID,
+					"addr": peerAddrStr,
 				})
 
 				if dt.cb.OnPunchComplete != nil {
@@ -576,6 +636,10 @@ func (dt *DirectTransport) handlePunchPacket(payload []byte, remoteAddr *net.UDP
 	}
 }
 
+// ============================================================================
+// FIX #1: handleNoisePacket ahora verifica la identidad del peer
+// ============================================================================
+
 func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 	dt.mu.Lock()
 	session := dt.session
@@ -583,6 +647,7 @@ func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 	peerAddr := dt.peerAddr
 	identity := dt.identity
 	peerDID := dt.peerDID
+	expectedPubX := dt.expectedPeerPubX
 	dt.mu.Unlock()
 
 	if session == nil {
@@ -616,6 +681,26 @@ func (dt *DirectTransport) handleNoisePacket(payload []byte) {
 	}
 
 	if completed {
+		// ================================================================
+		// FIX #1: VERIFICAR IDENTIDAD DEL INICIADOR
+		// El respondedor DEBE comparar la clave pública que Noise realmente
+		// autenticó (PeerStatic) contra la PubKeyX del ACL para el DID
+		// reclamado. Si no coincide, es suplantación → cerrar sesión.
+		// ================================================================
+		if expectedPubX != nil {
+			actualPubX := session.PeerStatic()
+			if actualPubX == nil || !bytes.Equal(actualPubX, expectedPubX[:]) {
+				fmt.Printf("[XTP] 🚨 SUPANTACIÓN DETECTADA: %s no es quien dice ser\n", peerDID[:20]+"...")
+				fmt.Printf("[XTP] 🚨 Clave esperada: %x...\n", expectedPubX[:8])
+				if actualPubX != nil {
+					fmt.Printf("[XTP] 🚨 Clave real:     %x...\n", actualPubX[:8])
+				}
+				dt.Close()
+				return
+			}
+			fmt.Printf("[XTP] ✅ Identidad verificada: %s\n", peerDID[:20]+"...")
+		}
+
 		fmt.Printf("[XTP] ✅ Noise IK completo con %s\n", peerDID[:20]+"...")
 		dt.onNoiseComplete()
 	}
@@ -643,7 +728,15 @@ func (dt *DirectTransport) onNoiseComplete() {
 		dt.cb.OnSessionActive(peerDID)
 	}
 
-	go dt.keepaliveLoop()
+	// FIX #7: recover en keepaliveLoop
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("[XTP] ⚠️ Panic recuperado en keepaliveLoop: %v\n", r)
+			}
+		}()
+		dt.keepaliveLoop()
+	}()
 }
 
 func (dt *DirectTransport) Send(plaintext []byte) error {

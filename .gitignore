@@ -2,6 +2,14 @@
 node.key
 acl.json
 alias.json
+cert.pem
+key.pem
+
+# Logs
+# *.log
+
+# Auditorías locales
+auditoria_*.txt
 
 # Binarios compilados (SOLO en la raíz)
 /mesh
