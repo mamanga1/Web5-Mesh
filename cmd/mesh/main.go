@@ -15,6 +15,14 @@ import (
 	"web5-mesh/cmd/mesh/commands"
 	"web5-mesh/src/config"
 	"web5-mesh/src/crypto"
+	"web5-mesh/src/xtp"
+)
+
+// Variables inyectadas por build.sh (ldflags)
+var (
+	buildCommit  string
+	buildTime    string
+	buildVersion string
 )
 
 const ListenPort = "54321"
@@ -23,14 +31,10 @@ func getFaroAddr() string {
 	return config.GetFaroAddr()
 }
 
-// ============================================================
-// FIX 1: math/rand → crypto/rand (anti-DPI, padding seguro)
-// ============================================================
 func addPadding(payload string) string {
 	size := 50 + int(time.Now().UnixNano()%150)
 	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	padding := make([]byte, size)
-
 	for i := range padding {
 		randBuf := make([]byte, 1)
 		if _, err := rand.Read(randBuf); err != nil {
@@ -39,7 +43,6 @@ func addPadding(payload string) string {
 		}
 		padding[i] = charset[int(randBuf[0])%len(charset)]
 	}
-
 	return fmt.Sprintf("%s|%s", payload, string(padding))
 }
 
@@ -80,7 +83,7 @@ type InnerPayload struct {
 type peerKeys struct {
 	DID       string
 	PubKeyEd  []byte
-	PubKeyX   []byte // ← FIX: clave X25519 para Noise IK
+	PubKeyX   []byte
 	SharedKey []byte
 }
 
@@ -89,34 +92,22 @@ func buildACLIndex(myID *crypto.Identity) (map[[4]byte]peerKeys, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Printf("🔍 DEBUG: ACL cargada con %d peers\n", len(acl.Peers))
-
 	index := make(map[[4]byte]peerKeys)
 	for did, peer := range acl.Peers {
-		fmt.Printf("🔍 DEBUG: Procesando peer %s\n", did)
-		fmt.Printf("🔍 DEBUG: PubKeyEd = '%s' (len=%d)\n", peer.PubKeyEd, len(peer.PubKeyEd))
-		fmt.Printf("🔍 DEBUG: PubKeyX = '%s' (len=%d)\n", peer.PubKeyX, len(peer.PubKeyX))
-
 		pubEd, err := hex.DecodeString(peer.PubKeyEd)
 		if err != nil {
-			fmt.Printf("❌ Error decodificando PubKeyEd para %s: %v\n", did, err)
 			continue
 		}
 		pubX, err := hex.DecodeString(peer.PubKeyX)
 		if err != nil {
-			fmt.Printf("❌ Error decodificando PubKeyX para %s: %v\n", did, err)
 			continue
 		}
-		fmt.Printf("🔍 DEBUG: PubKeyX decodificada len=%d\n", len(pubX))
-
 		sharedKey, err := crypto.DeriveSharedKey(myID.PrivKeyX, pubX)
 		if err != nil {
-			fmt.Printf("❌ Error derivando shared key para %s: %v\n", did, err)
 			continue
 		}
 		kid := crypto.DeriveKeyID(pubX)
-		index[kid] = peerKeys{DID: did, PubKeyEd: pubEd, PubKeyX: pubX, SharedKey: sharedKey} // ← FIX: PubKeyX
+		index[kid] = peerKeys{DID: did, PubKeyEd: pubEd, PubKeyX: pubX, SharedKey: sharedKey}
 	}
 	return index, nil
 }
@@ -125,6 +116,7 @@ func buildEncryptedPayload(myID *crypto.Identity, sharedKey []byte, inner InnerP
 	innerJSON, _ := json.Marshal(inner)
 	inner.Sig = base64.StdEncoding.EncodeToString(myID.SignMessage(innerJSON))
 	innerJSON, _ = json.Marshal(inner)
+
 	encrypted, err := crypto.EncryptPayload(sharedKey, innerJSON)
 	if err != nil {
 		return "", err
@@ -143,13 +135,11 @@ func handleCommand(cmd string) string {
 	return "✅ ACK"
 }
 
-// FIX M1: ExecuteRealCommand usa XTP para chat normal, fallback legacy para grupos
 func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string {
 	if targetDID == "" {
 		return "❌ DID destino vacío"
 	}
 
-	// Fallback legacy para comandos de grupo (hasta migrar GROUP_* a XTP)
 	if strings.HasPrefix(command, "GROUP_") || strings.HasPrefix(command, "GROUP:") {
 		acl, err := crypto.LoadACL()
 		if err != nil {
@@ -179,7 +169,6 @@ func ExecuteRealCommand(myID *crypto.Identity, targetDID, command string) string
 		return "📤 Mensaje de grupo enviado (relay)"
 	}
 
-	// XTP: intentar directo, fallback a relay automático
 	if globalTM != nil {
 		transport, err := globalTM.Send(targetDID, command)
 		if err != nil {
@@ -201,7 +190,6 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
 	if err != nil {
 		log.Fatalf("❌ DID no encontrado en ACL")
 	}
-
 	sharedKey, _ := crypto.DeriveSharedKey(myID.PrivKeyX, pubX)
 
 	inner := InnerPayload{FromDID: myID.DID, TS: time.Now().Unix(), Cmd: command}
@@ -218,9 +206,9 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
 	if err != nil {
 		log.Fatalf("⏳ Timeout esperando respuesta")
 	}
-
 	respRaw = stripPadding(respRaw)
 	respRaw = extractPayload(respRaw)
+
 	parts := strings.SplitN(respRaw, "|", 2)
 	if len(parts) == 2 {
 		ciphertext, _ := base64.StdEncoding.DecodeString(parts[1])
@@ -234,17 +222,63 @@ func runShell(myID *crypto.Identity, targetDID, command string) {
 	fmt.Printf("📩 Respuesta (cruda): %s\n", respRaw)
 }
 
+// FIX 17: runNode ahora usa XTP (TransportManager) en vez de
+// protocolo legacy sin Noise. Inicializa globalTM y procesa mensajes
+// a través del manager, que intenta directo primero y cae a relay.
 func runNode(myID *crypto.Identity) {
 	aclIndex, _ := buildACLIndex(myID)
 	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando...\n", len(aclIndex))
 	fmt.Println("📡 Keep-alive activo cada 15s.")
+	fmt.Println("🔐 XTP: transporte directo Noise IK activo")
 
-	// Conexión ya está abierta por shell.go o se abre ahora
 	if globalConn == nil && globalConnWS == nil {
 		if err := connectToFaroShell(); err != nil {
 			log.Fatalf("❌ Error conectando al Faro: %v", err)
 		}
 	}
+
+	// Inicializar TransportManager (igual que en runInteractiveShell)
+	xtpACLIndex := make(map[[4]byte]xtp.PeerKeys, len(aclIndex))
+	for kid, pk := range aclIndex {
+		xtpACLIndex[kid] = xtp.PeerKeys{
+			DID:       pk.DID,
+			PubKeyEd:  pk.PubKeyEd,
+			PubKeyX:   pk.PubKeyX,
+			SharedKey: pk.SharedKey,
+		}
+	}
+
+	globalTM = xtp.NewTransportManager(
+		myID,
+		faroSenderShell{},
+		xtpACLIndex,
+		xtp.ManagerCallbacks{
+			OnMessage: func(peerDID, displayName, command string) {
+				fmt.Printf("📩 [%s] %s\n", displayName, command)
+				respText := handleCommand(command)
+				if globalTM != nil {
+					globalTM.Send(peerDID, respText)
+				}
+			},
+			OnDirectSessionActive: func(peerDID string) {
+				fmt.Printf("🔐 [XTP] Conexión directa con %s\n", peerDID[:20]+"...")
+			},
+			OnDirectSessionLost: func(peerDID string) {
+				fmt.Printf("💀 [XTP] Sesión directa perdida con %s\n", peerDID[:20]+"...")
+			},
+			OnFallbackToRelay: func(peerDID string) {
+				fmt.Printf("🔄 [XTP] Usando relay con %s\n", peerDID[:20]+"...")
+			},
+			OnError: func(context string, err error) {
+				fmt.Printf("[XTP] ⚠️ Error en %s: %v\n", context, err)
+			},
+		},
+		xtp.DefaultManagerConfig(),
+	)
+
+	globalTM.FSM().Send(xtp.EvConnectFaro, nil)
+	globalTM.FSM().Send(xtp.EvFaroConnected, nil)
+	globalTM.FSM().Send(xtp.EvAnnounceSent, nil)
 
 	go func() {
 		for {
@@ -261,19 +295,28 @@ func runNode(myID *crypto.Identity) {
 			time.Sleep(1 * time.Second)
 			continue
 		}
-
 		raw = stripPadding(raw)
 		raw = extractPayload(raw)
+
+		// XTP maneja señales de faro y mensajes relay/directo
+		if globalTM != nil && globalTM.HandleIncoming(raw) {
+			continue
+		}
+
+		// Fallback: mensajes que XTP no reconoce (ACK_IP, etc.)
+		if strings.HasPrefix(raw, "ACK_IP ") || strings.HasPrefix(raw, "ACK") {
+			continue
+		}
+
+		// Legacy: mensajes relay que XTP no procesó
 		parts := strings.SplitN(raw, "|", 2)
 		if len(parts) != 2 {
 			continue
 		}
-
 		kidBytes, _ := hex.DecodeString(parts[0])
 		if len(kidBytes) != 4 {
 			continue
 		}
-
 		var kid [4]byte
 		copy(kid[:], kidBytes)
 
@@ -281,10 +324,8 @@ func runNode(myID *crypto.Identity) {
 		if !exists {
 			continue
 		}
-
 		ciphertext, _ := base64.StdEncoding.DecodeString(parts[1])
 		plaintext, _ := crypto.DecryptPayload(peer.SharedKey, ciphertext)
-
 		var inner InnerPayload
 		if json.Unmarshal(plaintext, &inner) != nil {
 			continue
@@ -302,18 +343,12 @@ func runNode(myID *crypto.Identity) {
 		}
 
 		fmt.Printf("📩 [%s] %s\n", peer.DID, inner.Cmd)
-
 		respText := handleCommand(inner.Cmd)
 		respInner := InnerPayload{FromDID: myID.DID, TS: time.Now().Unix(), Cmd: respText}
 		respPayload, _ := buildEncryptedPayload(myID, peer.SharedKey, respInner)
-
 		sendToFaroShell(fmt.Sprintf("RESPONSE %s %s", peer.DID, addPadding(respPayload)))
 	}
 }
-
-// ============================================================
-// MAIN
-// ============================================================
 
 func main() {
 	if len(os.Args) < 2 || os.Args[1] == "shell" {

@@ -3,14 +3,22 @@
 # Uso: ./build.sh [--all|--clean]
 #   --all   : Compilar para todas las plataformas
 #   --clean : Limpiar binarios y directorio dist
-
 set -e
 
 VERSION="v1.0.0"
 OUTPUT_DIR="./dist"
+
+# FIX 20: inyectar version/commit/time en los binarios.
+# Antes los ldflags solo tenían "-s -w" y VERIFY_HASH retornaba campos vacíos.
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS="-s -w -X main.buildVersion=${VERSION} -X main.buildCommit=${COMMIT} -X main.buildTime=${BUILD_TIME}"
+
 mkdir -p "$OUTPUT_DIR"
 
 echo "🔨 XIONIA Builder - $VERSION"
+echo "   Commit: $COMMIT"
+echo "   Build:  $BUILD_TIME"
 echo "================================"
 
 # ============================================
@@ -32,7 +40,8 @@ compile() {
     local EXT=$4
 
     echo "📦 Compilando $GOOS/$GOARCH..."
-    GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT$EXT" ./cmd/mesh
+    GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT_DIR/$OUTPUT$EXT" ./cmd/mesh
+
     if [ $? -eq 0 ]; then
         echo "✅ $OUTPUT$EXT listo"
     else
@@ -47,7 +56,8 @@ compile_faro() {
     local EXT=$4
 
     echo "📦 Compilando Faro $GOOS/$GOARCH..."
-    GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="-s -w" -o "$OUTPUT_DIR/$OUTPUT$EXT" ./cmd/faro
+    GOOS=$GOOS GOARCH=$GOARCH go build -ldflags="$LDFLAGS" -o "$OUTPUT_DIR/$OUTPUT$EXT" ./cmd/faro
+
     if [ $? -eq 0 ]; then
         echo "✅ $OUTPUT$EXT listo"
     else
@@ -59,16 +69,18 @@ generate_hashes() {
     echo ""
     echo "🔐 Generando hashes SHA256..."
     HASH_FILE="$OUTPUT_DIR/hashes-$(date +%Y%m%d).txt"
+
     echo "# XIONIA Hashes - $VERSION" > "$HASH_FILE"
+    echo "# Commit: $COMMIT" >> "$HASH_FILE"
     echo "# Generado: $(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> "$HASH_FILE"
     echo "" >> "$HASH_FILE"
-    
+
     for file in "$OUTPUT_DIR"/*; do
         if [ -f "$file" ] && [[ ! "$file" == *.txt ]]; then
             sha256sum "$file" >> "$HASH_FILE"
         fi
     done
-    
+
     echo "✅ Hashes guardados en $HASH_FILE"
     cat "$HASH_FILE"
 }
@@ -80,13 +92,14 @@ generate_hashes() {
 build_native() {
     echo ""
     echo "📀 Compilación nativa..."
-    go build -ldflags="-s -w" -o mesh ./cmd/mesh
-    go build -ldflags="-s -w" -o faro ./cmd/faro
-    
+
+    go build -ldflags="$LDFLAGS" -o mesh ./cmd/mesh
+    go build -ldflags="$LDFLAGS" -o faro ./cmd/faro
+
     # Copiar a dist
     cp mesh "$OUTPUT_DIR/mesh-linux-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" 2>/dev/null || true
     cp faro "$OUTPUT_DIR/faro-linux-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" 2>/dev/null || true
-    
+
     echo "✅ Nativo compilado"
 }
 

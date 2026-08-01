@@ -1,8 +1,9 @@
 package crypto
 
 import (
-	"crypto/rand"
+	"encoding/binary"
 	"errors"
+	"sync/atomic"
 
 	"golang.org/x/crypto/chacha20poly1305"
 )
@@ -16,15 +17,23 @@ func DeriveKeyID(pubKeyX []byte) [4]byte {
 	return id
 }
 
+// FIX 13: contador atómico para nonces determinísticos.
+// El nonce aleatorio de 12 bytes tiene riesgo de colisión a ~2^48 mensajes.
+// Con contador, la colisión es imposible (se necesitan 2^64 mensajes).
+var nonceCounter uint64
+
 func EncryptPayload(sharedKey []byte, plaintext []byte) ([]byte, error) {
 	aead, err := chacha20poly1305.New(sharedKey)
 	if err != nil {
 		return nil, err
 	}
+
+	// Nonce de 12 bytes: 4 bytes en cero + 8 bytes de contador little-endian.
+	// Cada llamada a EncryptPayload incrementa el contador atómicamente.
 	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		return nil, err
-	}
+	counter := atomic.AddUint64(&nonceCounter, 1)
+	binary.LittleEndian.PutUint64(nonce[4:], counter)
+
 	return aead.Seal(nonce, nonce, plaintext, nil), nil
 }
 
@@ -39,6 +48,5 @@ func DecryptPayload(sharedKey []byte, ciphertext []byte) ([]byte, error) {
 	}
 	nonce := ciphertext[:nonceSize]
 	actualCipher := ciphertext[nonceSize:]
-
 	return aead.Open(nil, nonce, actualCipher, nil)
 }

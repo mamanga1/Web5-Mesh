@@ -106,13 +106,11 @@ func completer(d prompt.Document) []prompt.Suggest {
 		"faro set", "faro reset",
 		"xtp status",
 	}
-
 	for _, cmd := range allCommands {
 		if strings.HasPrefix(cmd, text) {
 			s = append(s, prompt.Suggest{Text: cmd})
 		}
 	}
-
 	return s
 }
 
@@ -184,7 +182,6 @@ func isCommand(input string) bool {
 	if len(words) == 0 {
 		return false
 	}
-
 	first := strings.ToLower(words[0])
 	for _, cmd := range known {
 		if first == cmd || first == "/"+cmd {
@@ -207,19 +204,15 @@ func connectToFaroShell() error {
 	if err := connectUDPShell(host + ":54321"); err == nil {
 		return nil
 	}
-
 	if err := connectUDPShell(host + ":443"); err == nil {
 		return nil
 	}
-
 	if err := connectWSShell(); err == nil {
 		return nil
 	}
-
 	return fmt.Errorf("sin ruta al faro %s", globalFaroAddr)
 }
 
-// FIX: udp4 en vez de udp
 func connectUDPShell(addr string) error {
 	udpAddr, err := net.ResolveUDPAddr("udp4", addr)
 	if err != nil {
@@ -279,10 +272,20 @@ func connectWSShell() error {
 	headers.Set("X-Xionia-Sig", base64.StdEncoding.EncodeToString(sig))
 
 	wsURL := fmt.Sprintf("wss://%s/ws", wsHost)
+
+	// FIX 1: InsecureSkipVerify en false por defecto (anti-MITM).
+	// Si el faro usa certs self-signed, setear XION_INSECURE_WS=1
+	// como variable de entorno (solo para desarrollo/testing).
+	insecureWS := os.Getenv("XION_INSECURE_WS") == "1"
+	if insecureWS {
+		fmt.Println("⚠️ [WS] XION_INSECURE_WS=1 — TLS sin verificar (solo desarrollo)")
+	}
+
 	dialer := websocket.Dialer{
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: true},
+		TLSClientConfig:  &tls.Config{InsecureSkipVerify: insecureWS},
 		HandshakeTimeout: 5 * time.Second,
 	}
+
 	wsConn, _, err := dialer.Dial(wsURL, headers)
 	if err != nil {
 		return fmt.Errorf("conectando WS: %v", err)
@@ -318,7 +321,6 @@ func readFromFaroShell() (string, error) {
 		}
 		return string(message), nil
 	}
-
 	if globalConn == nil {
 		return "", fmt.Errorf("sin conexión UDP")
 	}
@@ -367,7 +369,6 @@ func startNetworkListener() {
 			}
 
 			touchActivity()
-
 			raw = stripPadding(raw)
 			raw = extractPayload(raw)
 
@@ -399,12 +400,10 @@ func startNetworkListener() {
 			if len(parts) != 2 {
 				continue
 			}
-
 			kidBytes, err := hex.DecodeString(parts[0])
 			if err != nil || len(kidBytes) != 4 {
 				continue
 			}
-
 			var kid [4]byte
 			copy(kid[:], kidBytes)
 
@@ -417,7 +416,6 @@ func startNetworkListener() {
 			if err != nil {
 				continue
 			}
-
 			plaintext, err := crypto.DecryptPayload(peer.SharedKey, ciphertext)
 			if err != nil {
 				continue
@@ -432,10 +430,10 @@ func startNetworkListener() {
 			innerForVerify.Sig = ""
 			verifyJSON, _ := json.Marshal(innerForVerify)
 			sigBytes, _ := base64.StdEncoding.DecodeString(inner.Sig)
-
 			if !crypto.VerifyMessage(peer.PubKeyEd, verifyJSON, sigBytes) {
 				continue
 			}
+
 			if time.Now().Unix()-inner.TS > 60 {
 				continue
 			}
@@ -448,8 +446,13 @@ func startNetworkListener() {
 					alias := parts[1]
 					var group crypto.Group
 					if json.Unmarshal([]byte(parts[2]), &group) == nil {
-						crypto.SaveGroupDirect(alias, &group)
-						msgChan <- fmt.Sprintf("🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)", alias, len(group.Members))
+						// FIX Kimi 14: verificar que el sender sea el admin del grupo
+						if group.Admin != inner.FromDID {
+							msgChan <- fmt.Sprintf("⚠️ [SISTEMA] GROUP_SYNC rechazado: %s no es admin de '%s'", displayName, alias)
+						} else {
+							crypto.SaveGroupDirect(alias, &group)
+							msgChan <- fmt.Sprintf("🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)", alias, len(group.Members))
+						}
 					}
 				}
 				continue
@@ -508,8 +511,10 @@ func startAnnounceLoop() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-globalQuit:
@@ -531,6 +536,7 @@ func startAnnounceLoop() {
 func startWatchdog() {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+
 	for {
 		select {
 		case <-globalQuit:
@@ -538,6 +544,7 @@ func startWatchdog() {
 		case <-ticker.C:
 			if stale := staleSince(); stale > 20*time.Second {
 				fmt.Printf("\n⚠️ [WATCHDOG] Sin actividad hace %v, reconectando...\n", stale)
+
 				if !globalUseWS && globalConn != nil {
 					globalConn.Close()
 					globalConn = nil
@@ -546,12 +553,14 @@ func startWatchdog() {
 					globalConnWS.Close()
 					globalConnWS = nil
 				}
+
 				if err := connectToFaroShell(); err == nil {
 					ts := fmt.Sprintf("%d", time.Now().Unix())
 					sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
 					msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
 					sendToFaroShell(addPadding(msg))
 					touchActivity()
+
 					if globalTM != nil {
 						globalTM.FSM().Send(xtp.EvFaroConnected, nil)
 						globalTM.FSM().Send(xtp.EvAnnounceSent, nil)
@@ -567,7 +576,6 @@ func startWatchdog() {
 
 func runInteractiveShell() {
 	var err error
-
 	defer restoreTerminal()
 
 	globalID, err = crypto.LoadOrCreateIdentity()
@@ -575,7 +583,6 @@ func runInteractiveShell() {
 		fmt.Printf("❌ Error de identidad: %v\n", err)
 		return
 	}
-
 	crypto.SetSelfDID(globalID.DID)
 
 	globalFaroAddr = getFaroAddr()
@@ -599,12 +606,18 @@ func runInteractiveShell() {
 						alias := parts[1]
 						var group crypto.Group
 						if json.Unmarshal([]byte(parts[2]), &group) == nil {
-							crypto.SaveGroupDirect(alias, &group)
-							msgChan <- fmt.Sprintf("🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)", alias, len(group.Members))
+							// FIX Kimi 14: verificar que el sender sea el admin del grupo
+							if group.Admin != peerDID {
+								msgChan <- fmt.Sprintf("⚠️ [SISTEMA] GROUP_SYNC rechazado: %s no es admin de '%s'", displayName, alias)
+							} else {
+								crypto.SaveGroupDirect(alias, &group)
+								msgChan <- fmt.Sprintf("🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)", alias, len(group.Members))
+							}
 						}
 					}
 					return
 				}
+
 				if strings.HasPrefix(command, "GROUP_DELETE:") {
 					parts := strings.SplitN(command, ":", 2)
 					if len(parts) == 2 {
@@ -613,6 +626,7 @@ func runInteractiveShell() {
 					}
 					return
 				}
+
 				if strings.HasPrefix(command, "GROUP_KICKED:") {
 					parts := strings.SplitN(command, ":", 2)
 					if len(parts) == 2 {
@@ -621,6 +635,7 @@ func runInteractiveShell() {
 					}
 					return
 				}
+
 				if strings.HasPrefix(command, "GROUP_LEAVE:") {
 					parts := strings.SplitN(command, ":", 3)
 					if len(parts) == 3 {
@@ -629,6 +644,7 @@ func runInteractiveShell() {
 					}
 					return
 				}
+
 				if strings.HasPrefix(command, "GROUP:") {
 					parts := strings.SplitN(command, ":", 3)
 					if len(parts) == 3 {
@@ -636,6 +652,7 @@ func runInteractiveShell() {
 						return
 					}
 				}
+
 				msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, command)
 			},
 			OnDirectSessionActive: func(peerDID string) {
@@ -669,7 +686,6 @@ func runInteractiveShell() {
 	fmt.Println(" XION KERNEL v1.0.0 | Modo Seguro: ON")
 	fmt.Println(" 🆔 TU IDENTIDAD:")
 	fmt.Println(" DID: " + globalID.DID)
-
 	pubEdHex := hex.EncodeToString(globalID.PubKeyEd)
 	pubXHex := hex.EncodeToString(globalID.PubKeyX[:])
 	fmt.Println(" PubKey Ed: " + pubEdHex)
@@ -690,7 +706,7 @@ func runInteractiveShell() {
 	}
 	fmt.Println(" 🔐 XTP: transporte directo Noise IK activo")
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n\n", len(globalACLIndex))
+	fmt.Printf("🛡️ [NODO] ACL indexada con %d pares. Escuchando y listo.\n", len(globalACLIndex))
 
 	cmdHistory = []string{}
 	msgHistory = make(map[string][]string)
@@ -762,17 +778,14 @@ func runInteractiveShell() {
 			if len(parts) == 3 {
 				target := parts[1]
 				msg := parts[2]
-
 				targetDID, _ := crypto.ResolveNode(target)
 				if targetDID == "" {
 					targetDID = target
 				}
-
 				if globalTM == nil {
 					fmt.Println("❌ TransportManager no inicializado")
 					continue
 				}
-
 				transport, err := globalTM.Send(targetDID, "CHAT:"+msg)
 				if err != nil {
 					fmt.Printf("❌ Error enviando por XTP: %v\n", err)
@@ -816,7 +829,6 @@ func runInteractiveShell() {
 			} else if len(parts) == 3 {
 				target := strings.TrimSpace(parts[1])
 				flag := strings.TrimSpace(parts[2])
-
 				if flag == "on" {
 					activeRecipient = "chat:" + target
 					if _, ok := msgHistory[target]; !ok {
@@ -872,9 +884,7 @@ func runInteractiveShell() {
 			if !globalUseWS && globalConn != nil {
 				globalConn.Close()
 			}
-
 			fmt.Println("🧹 Historial de comandos y mensajes eliminado (privacidad total).")
-
 			return
 		}
 

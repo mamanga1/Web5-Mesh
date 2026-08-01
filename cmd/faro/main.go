@@ -94,6 +94,9 @@ var (
 // SESIONES ACTIVAS
 // ============================================================================
 
+// FIX 8: límite de sesiones para prevenir DoS por sesiones fantasmas
+const maxSessions = 10000
+
 type sessionEntry struct {
 	didA     string
 	didB     string
@@ -123,6 +126,17 @@ var (
 	udpConnsMu     sync.RWMutex
 )
 
+// FIX 11: devolver la primera conexión UDP disponible
+// en vez de hardcodear globalUDPConns["54321"]
+func getPrimaryUDPConn() *net.UDPConn {
+	udpConnsMu.RLock()
+	defer udpConnsMu.RUnlock()
+	for _, conn := range globalUDPConns {
+		return conn
+	}
+	return nil
+}
+
 // ============================================================================
 // GATE DID
 // ============================================================================
@@ -133,6 +147,15 @@ var (
 	gateDIDs   = make(map[string]string)
 	gateDIDsMu sync.RWMutex
 )
+
+// FIX  5/6: verificar que el DID reclamado coincide con el DID
+// autenticado via Gate para esa dirección remota
+func verifyGateDID(remoteAddr string, claimedDID string) bool {
+	gateDIDsMu.RLock()
+	gateDID := gateDIDs[remoteAddr]
+	gateDIDsMu.RUnlock()
+	return gateDID != "" && gateDID == claimedDID
+}
 
 // ============================================================================
 // RATE LIMITER
@@ -148,18 +171,22 @@ var limiter = &rateLimiter{hits: make(map[string][]time.Time)}
 func (rl *rateLimiter) Allow(key string) bool {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
+
 	now := time.Now()
 	cutoff := now.Add(-5 * time.Second)
+
 	recent := rl.hits[key][:0]
 	for _, t := range rl.hits[key] {
 		if t.After(cutoff) {
 			recent = append(recent, t)
 		}
 	}
+
 	if len(recent) >= 20 {
 		rl.hits[key] = recent
 		return false
 	}
+
 	rl.hits[key] = append(recent, now)
 	return true
 }
@@ -180,8 +207,26 @@ var (
 // UTILIDADES
 // ============================================================================
 
+// FIX 2: CheckOrigin restringido.
+// Clientes nativos (Go, Android) no envían Origin → se permiten.
+// Navegadores envían Origin → se verifica que coincida con el Host.
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // cliente nativo, sin Origin
+		}
+		// Verificar que el host del Origin coincida con el Host de la request
+		originHost := origin
+		originHost = strings.TrimPrefix(originHost, "https://")
+		originHost = strings.TrimPrefix(originHost, "http://")
+		originHost = strings.TrimPrefix(originHost, "wss://")
+		originHost = strings.TrimPrefix(originHost, "ws://")
+		if idx := strings.Index(originHost, "/"); idx != -1 {
+			originHost = originHost[:idx]
+		}
+		return originHost == r.Host
+	},
 }
 
 var (
@@ -223,14 +268,34 @@ func maskRemoteAddr(addr string) string {
 	return host + "..."
 }
 
+// FIX 16: stripPadding inteligente.
+// Solo trunca si el sufijo después del último '|' es padding válido
+// (exclusivamente caracteres alfanuméricos). Si contiene otros caracteres,
+// es parte del payload legítimo y NO se trunca.
 func stripPadding(data string) string {
-	if idx := strings.LastIndex(data, "|"); idx != -1 {
-		return data[:idx]
+	idx := strings.LastIndex(data, "|")
+	if idx == -1 {
+		return data
 	}
-	return data
+	suffix := data[idx+1:]
+	if len(suffix) == 0 {
+		return data
+	}
+	for _, c := range suffix {
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return data // no es padding, no truncar
+		}
+	}
+	return data[:idx]
 }
 
+// FIX 12: isHandshake más estricto.
+// Verifica que empiece con '{' (JSON) además de contener los campos.
+// Previene que paquetes binarios aleatorios consuman CPU en verificación.
 func isHandshake(data []byte) bool {
+	if len(data) < 10 || data[0] != '{' {
+		return false
+	}
 	return bytes.Contains(data, []byte(`"did"`)) &&
 		bytes.Contains(data, []byte(`"sig"`)) &&
 		bytes.Contains(data, []byte(`"nonce"`))
@@ -257,7 +322,10 @@ func verifyAnnounceSig(did, ts, sig string) bool {
 // ============================================================================
 
 func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
-	if !limiter.Allow(remoteAddr.String()) {
+	// FIX 3: rate limit por IP sola (sin puerto).
+	// Antes usaba remoteAddr.String() que incluye el puerto,
+	// permitiendo evasión cambiando de puerto fuente.
+	if !limiter.Allow(remoteAddr.IP.String()) {
 		atomic.AddInt64(&statsDropped, 1)
 		return
 	}
@@ -300,18 +368,28 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 	if len(parts) < 2 {
 		return
 	}
+
 	cmd := parts[0]
 
 	switch cmd {
-
 	case "ANNOUNCE":
 		if len(parts) == 4 {
 			did := parts[1]
 			ts := parts[2]
 			sig := stripPadding(parts[3])
+
 			if !verifyAnnounceSig(did, ts, sig) {
 				return
 			}
+
+			// FIX 5: verificar que el DID del ANNOUNCE coincide
+			// con el DID autenticado via Gate para esta IP
+			if !verifyGateDID(remoteAddr.String(), did) {
+				fmt.Printf("[FARO-UDP] ⚠️ ANNOUNCE rechazado: DID %s no coincide con Gate para %s\n",
+					did[:20]+"...", maskAddr(remoteAddr))
+				return
+			}
+
 			registrySet(did, &registryEntry{
 				addr:     remoteAddr,
 				lastSeen: time.Now(),
@@ -319,6 +397,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			})
 			atomic.StoreInt64(&statsNodes, int64(faroGate.Count()))
 			fmt.Printf("[FARO-UDP] 📥 ANNOUNCE: %s desde %s\n", did[:20]+"...", maskAddr(remoteAddr))
+
 			ack := fmt.Sprintf("ACK_IP %s", remoteAddr.IP.String())
 			conn.WriteToUDP([]byte(ack), remoteAddr)
 		}
@@ -327,6 +406,13 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 		if len(parts) >= 3 {
 			targetDID := stripPadding(parts[1])
 			senderDID := stripPadding(parts[2])
+
+			// FIX 6: verificar senderDID contra Gate
+			if !verifyGateDID(remoteAddr.String(), senderDID) {
+				fmt.Printf("[FARO-UDP] ⚠️ OPEN_SESSION rechazado: senderDID %s no coincide con Gate\n",
+					senderDID[:20]+"...")
+				return
+			}
 
 			senderEntry, senderExists := registryGet(senderDID)
 			targetEntry, targetExists := registryGet(targetDID)
@@ -338,7 +424,15 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			}
 
 			key := sessionKey(senderDID, targetDID)
+
+			// FIX 8: límite de sesiones
 			sessionMu.Lock()
+			if len(sessions) >= maxSessions {
+				sessionMu.Unlock()
+				errMsg := fmt.Sprintf("SESSION_ERROR %s: too many sessions", targetDID)
+				conn.WriteToUDP([]byte(errMsg), remoteAddr)
+				return
+			}
 			sessions[key] = &sessionEntry{
 				didA:     senderDID,
 				didB:     targetDID,
@@ -361,26 +455,29 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				senderDID[:15]+"...", targetDID[:15]+"...")
 		}
 
-	// FIX: usar la IP pública del registry del sender, no la basura local que manda el nodo
 	case "PUNCH":
 		if len(parts) >= 3 {
 			targetDID := stripPadding(parts[1])
 			senderDID := stripPadding(parts[2])
 
+			// FIX Kimi 6: verificar senderDID contra Gate
+			if !verifyGateDID(remoteAddr.String(), senderDID) {
+				fmt.Printf("[FARO-UDP] ⚠️ PUNCH rechazado: senderDID %s no coincide con Gate\n",
+					senderDID[:20]+"...")
+				return
+			}
+
 			targetEntry, exists := registryGet(targetDID)
 			if !exists {
 				return
 			}
-
 			senderEntry, senderExists := registryGet(senderDID)
 			if !senderExists {
 				return
 			}
 
-			// Usar la IP pública REAL del sender (la del registry), no el endpoint del mensaje
 			punchCmd := fmt.Sprintf("PUNCH_NOW %s %s", senderDID, senderEntry.endpoint)
 			conn.WriteToUDP([]byte(punchCmd), targetEntry.addr)
-
 			fmt.Printf("[FARO] 👊 PUNCH: %s → %s (endpoint: %s)\n",
 				senderDID[:15]+"...", targetDID[:15]+"...", maskRemoteAddr(senderEntry.endpoint))
 		}
@@ -397,7 +494,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				s.lastSeen = time.Now()
 			}
 			sessionMu.Unlock()
-
 			fmt.Printf("[FARO] ✅ SESSION_ACK: %s ↔ %s (directo activo)\n",
 				senderDID[:15]+"...", targetDID[:15]+"...")
 		}
@@ -411,7 +507,6 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			sessionMu.Lock()
 			delete(sessions, key)
 			sessionMu.Unlock()
-
 			fmt.Printf("[FARO] 🔒 CLOSE_SESSION: %s ↔ %s\n",
 				senderDID[:15]+"...", targetDID[:15]+"...")
 		}
@@ -421,6 +516,13 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			targetDID := parts[1]
 			senderDID := parts[2]
 			payload := parts[3]
+
+			// FIX 6: verificar senderDID contra Gate
+			if !verifyGateDID(remoteAddr.String(), senderDID) {
+				fmt.Printf("[FARO-UDP] ⚠️ RELAY rechazado: senderDID %s no coincide con Gate\n",
+					senderDID[:20]+"...")
+				return
+			}
 
 			key := sessionKey(senderDID, targetDID)
 			sessionMu.RLock()
@@ -447,6 +549,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			wsMu.RLock()
 			targetWS, existsWS := wsRegistry[targetDID]
 			wsMu.RUnlock()
+
 			if existsWS {
 				if err := targetWS.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
 					wsMu.Lock()
@@ -474,6 +577,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			wsMu.RLock()
 			_, existsWS := wsRegistry[did]
 			wsMu.RUnlock()
+
 			if existsUDP || existsWS {
 				conn.WriteToUDP([]byte("READY"), remoteAddr)
 			} else {
@@ -517,9 +621,11 @@ func handleVerifyHash(conn *net.UDPConn, addr *net.UDPAddr) {
 		return
 	}
 	defer f.Close()
+
 	h := sha256.New()
 	io.Copy(h, f)
 	hash := hex.EncodeToString(h.Sum(nil))
+
 	info, _ := os.Stat(exe)
 	resp := fmt.Sprintf(
 		`{"hash":"%s","size":%d,"commit":"%s","built":"%s","version":"%s"}`,
@@ -569,7 +675,6 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	gateDIDsMu.Lock()
 	gateDIDs[r.RemoteAddr] = gateDID
 	gateDIDsMu.Unlock()
-
 	fmt.Printf("[FARO-WS] 🔑 Gate: %s autorizado desde %s\n", gateDID[:20]+"...", maskRemoteAddr(r.RemoteAddr))
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -578,7 +683,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	// FIX 7: límite de lectura para prevenir OOM
+	conn.SetReadLimit(65536)
+
 	var myDID string
+
 	defer func() {
 		if myDID == "" {
 			return
@@ -598,11 +707,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			break
 		}
+
 		msg := strings.TrimSpace(string(message))
 		parts := strings.SplitN(msg, " ", 5)
 		if len(parts) < 2 {
 			continue
 		}
+
 		cmd := parts[0]
 
 		switch cmd {
@@ -611,12 +722,23 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				did := parts[1]
 				ts := parts[2]
 				sig := stripPadding(parts[3])
+
 				if !verifyAnnounceSig(did, ts, sig) {
 					continue
 				}
+
+				// FIX Kimi 5: verificar DID contra Gate
+				if !verifyGateDID(r.RemoteAddr, did) {
+					fmt.Printf("[FARO-WS] ⚠️ ANNOUNCE rechazado: DID %s no coincide con Gate\n",
+						did[:20]+"...")
+					continue
+				}
+
 				myDID = did
 				wsMu.Lock()
 				wsRegistry[did] = conn
+				// FIX Kimi 10: setear wsLastClient para que RESPONSE funcione
+				wsLastClient[did] = conn
 				wsMu.Unlock()
 				fmt.Printf("[FARO-WS] 📥 ANNOUNCE: %s\n", did[:20]+"...")
 			}
@@ -625,6 +747,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if len(parts) >= 3 {
 				targetDID := stripPadding(parts[1])
 				senderDID := stripPadding(parts[2])
+
+				// FIX Kimi 6: verificar senderDID contra Gate
+				if !verifyGateDID(r.RemoteAddr, senderDID) {
+					conn.WriteMessage(websocket.TextMessage,
+						[]byte(fmt.Sprintf("SESSION_ERROR %s: sender not authenticated", targetDID)))
+					continue
+				}
 
 				_, targetExists := registryGet(targetDID)
 				wsMu.RLock()
@@ -638,7 +767,15 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 
 				key := sessionKey(senderDID, targetDID)
+
+				// FIX Kimi 8: límite de sesiones
 				sessionMu.Lock()
+				if len(sessions) >= maxSessions {
+					sessionMu.Unlock()
+					conn.WriteMessage(websocket.TextMessage,
+						[]byte(fmt.Sprintf("SESSION_ERROR %s: too many sessions", targetDID)))
+					continue
+				}
 				sessions[key] = &sessionEntry{
 					didA: senderDID, didB: targetDID,
 					created: time.Now(), lastSeen: time.Now(), active: false,
@@ -649,18 +786,19 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				if entry, ok := registryGet(targetDID); ok {
 					targetEndpoint = entry.endpoint
 				}
+
 				sessionInfo := fmt.Sprintf("SESSION_INFO %s %s", targetDID, targetEndpoint)
 				conn.WriteMessage(websocket.TextMessage, []byte(sessionInfo))
 
+				// FIX Kimi 11: usar getPrimaryUDPConn() en vez de hardcodear "54321"
 				if targetEntry, ok := registryGet(targetDID); ok {
-					udpConnsMu.RLock()
-					udpConn := globalUDPConns["54321"]
-					udpConnsMu.RUnlock()
+					udpConn := getPrimaryUDPConn()
 					if udpConn != nil {
 						notify := fmt.Sprintf("SESSION_INCOMING %s ws", senderDID)
 						udpConn.WriteToUDP([]byte(notify), targetEntry.addr)
 					}
 				}
+
 				wsMu.RLock()
 				if targetWS, ok := wsRegistry[targetDID]; ok {
 					notify := fmt.Sprintf("SESSION_INCOMING %s ws", senderDID)
@@ -673,6 +811,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if len(parts) >= 3 {
 				targetDID := stripPadding(parts[1])
 				senderDID := stripPadding(parts[2])
+
 				key := sessionKey(senderDID, targetDID)
 				sessionMu.Lock()
 				if s, ok := sessions[key]; ok {
@@ -686,6 +825,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if len(parts) >= 3 {
 				targetDID := stripPadding(parts[1])
 				senderDID := stripPadding(parts[2])
+
 				key := sessionKey(senderDID, targetDID)
 				sessionMu.Lock()
 				delete(sessions, key)
@@ -697,6 +837,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				targetDID := parts[1]
 				senderDID := parts[2]
 				payload := parts[3]
+
+				// FIX Kimi 6: verificar senderDID contra Gate
+				if !verifyGateDID(r.RemoteAddr, senderDID) {
+					conn.WriteMessage(websocket.TextMessage,
+						[]byte(fmt.Sprintf("ERROR %s: sender not authenticated", targetDID)))
+					continue
+				}
 
 				key := sessionKey(senderDID, targetDID)
 				sessionMu.RLock()
@@ -715,6 +862,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				wsMu.RLock()
 				targetWS, existsWS := wsRegistry[targetDID]
 				wsMu.RUnlock()
+
 				if existsWS {
 					if err := targetWS.WriteMessage(websocket.TextMessage, []byte(payload)); err != nil {
 						wsMu.Lock()
@@ -731,10 +879,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
+				// FIX 11: usar getPrimaryUDPConn()
 				if entry, ok := registryGet(targetDID); ok {
-					udpConnsMu.RLock()
-					udpConn := globalUDPConns["54321"]
-					udpConnsMu.RUnlock()
+					udpConn := getPrimaryUDPConn()
 					if udpConn != nil {
 						udpConn.WriteToUDP([]byte(payload), entry.addr)
 						conn.WriteMessage(websocket.TextMessage,
@@ -751,9 +898,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if len(parts) >= 3 {
 				targetDID := parts[1]
 				payload := parts[2]
+
 				wsMu.RLock()
 				client, exists := wsLastClient[targetDID]
 				wsMu.RUnlock()
+
 				if exists {
 					client.WriteMessage(websocket.TextMessage, []byte(payload))
 				}
@@ -766,6 +915,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				wsMu.RLock()
 				_, existsWS := wsRegistry[did]
 				wsMu.RUnlock()
+
 				if existsUDP || existsWS {
 					conn.WriteMessage(websocket.TextMessage, []byte("READY"))
 				} else {
@@ -814,7 +964,6 @@ type packet struct {
 }
 
 func startUDPServer(port string) {
-	// FIX: udp4 en vez de udp, para matar IPv6
 	addr, err := net.ResolveUDPAddr("udp4", "0.0.0.0:"+port)
 	if err != nil {
 		log.Fatalf("Error resolviendo UDP %s: %v", port, err)
@@ -832,7 +981,8 @@ func startUDPServer(port string) {
 	fmt.Printf("🛡️ [FARO-UDP] Relay + Signaling en 0.0.0.0:%s (Gate DID activo)\n", port)
 
 	const numWorkers = 8
-	packetChan := make(chan packet, 2048)
+	// FIX 9: buffer más grande (8192 vs 2048) para absorber ráfagas
+	packetChan := make(chan packet, 8192)
 
 	for i := 0; i < numWorkers; i++ {
 		go func() {
@@ -848,12 +998,18 @@ func startUDPServer(port string) {
 		if err != nil {
 			continue
 		}
+
 		data := make([]byte, n)
 		copy(data, buf[:n])
+
 		select {
 		case packetChan <- packet{data: data, addr: remoteAddr}:
 		default:
-			atomic.AddInt64(&statsDropped, 1)
+			// FIX 9: loguear drops (cada 1000 para no spamear)
+			dropped := atomic.AddInt64(&statsDropped, 1)
+			if dropped%1000 == 0 {
+				fmt.Printf("[FARO-UDP] ⚠️ %d paquetes descartados (buffer lleno)\n", dropped)
+			}
 		}
 	}
 }
@@ -866,15 +1022,19 @@ func startWebSocketServer() {
 		log.Printf("[FARO-WS] El Faro sigue sirviendo UDP igual.")
 		return
 	}
+
 	tlsConfig := &tls.Config{Certificates: []tls.Certificate{cert}}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", handleWebSocket)
+
 	server := &http.Server{
 		Addr:      ":" + port,
 		Handler:   mux,
 		TLSConfig: tlsConfig,
 		ErrorLog:  log.New(io.Discard, "", 0),
 	}
+
 	fmt.Printf("🛡️ [FARO-WS] WebSocket TLS en 0.0.0.0:%s (Gate DID activo)\n", port)
 	if err := server.ListenAndServeTLS("", ""); err != nil {
 		log.Printf("[FARO-WS] ❌ Error: %v", err)
@@ -936,6 +1096,7 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
 	<-sigChan
+
 	fmt.Println("\n🛑 Apagando faro...")
 	fmt.Println("👋 Faro apagado limpiamente")
 }
