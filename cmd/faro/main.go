@@ -272,6 +272,13 @@ func maskRemoteAddr(addr string) string {
 // Solo trunca si el sufijo después del último '|' es padding válido
 // (exclusivamente caracteres alfanuméricos). Si contiene otros caracteres,
 // es parte del payload legítimo y NO se trunca.
+func truncDID(s string) string {
+	if len(s) > 20 {
+		return s[:20] + "..."
+	}
+	return s
+}
+
 func stripPadding(data string) string {
 	idx := strings.LastIndex(data, "|")
 	if idx == -1 {
@@ -342,7 +349,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 		ack := fmt.Sprintf(`{"ack":"ok","did":"%s","ts":%d,"nodes":%d}`,
 			did, time.Now().Unix(), faroGate.Count())
 		conn.WriteToUDP([]byte(ack), remoteAddr)
-		fmt.Printf("[FARO-UDP] 🔑 Gate: %s autorizado desde %s\n", did[:20]+"...", maskAddr(remoteAddr))
+		fmt.Printf("[FARO-UDP] 🔑 Gate: %s autorizado desde %s\n", truncDID(did), maskAddr(remoteAddr))
 		return
 	}
 
@@ -352,7 +359,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 		gateDIDsMu.RUnlock()
 		if knownDID != "" {
 			fmt.Printf("[FARO-UDP] ⚠️ Gate rechazó %s (DID: %s) — IP cambió\n",
-				maskAddr(remoteAddr), knownDID[:20]+"...")
+				maskAddr(remoteAddr), truncDID(knownDID))
 		}
 		return
 	}
@@ -386,7 +393,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			// con el DID autenticado via Gate para esta IP
 			if !verifyGateDID(remoteAddr.String(), did) {
 				fmt.Printf("[FARO-UDP] ⚠️ ANNOUNCE rechazado: DID %s no coincide con Gate para %s\n",
-					did[:20]+"...", maskAddr(remoteAddr))
+					truncDID(did), maskAddr(remoteAddr))
 				return
 			}
 
@@ -396,7 +403,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 				endpoint: remoteAddr.String(),
 			})
 			atomic.StoreInt64(&statsNodes, int64(faroGate.Count()))
-			fmt.Printf("[FARO-UDP] 📥 ANNOUNCE: %s desde %s\n", did[:20]+"...", maskAddr(remoteAddr))
+			fmt.Printf("[FARO-UDP] 📥 ANNOUNCE: %s desde %s\n", truncDID(did), maskAddr(remoteAddr))
 
 			ack := fmt.Sprintf("ACK_IP %s", remoteAddr.IP.String())
 			conn.WriteToUDP([]byte(ack), remoteAddr)
@@ -410,7 +417,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			// FIX 6: verificar senderDID contra Gate
 			if !verifyGateDID(remoteAddr.String(), senderDID) {
 				fmt.Printf("[FARO-UDP] ⚠️ OPEN_SESSION rechazado: senderDID %s no coincide con Gate\n",
-					senderDID[:20]+"...")
+					truncDID(senderDID))
 				return
 			}
 
@@ -452,7 +459,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			conn.WriteToUDP([]byte(punchNotify), targetEntry.addr)
 
 			fmt.Printf("[FARO] 🔗 OPEN_SESSION: %s → %s\n",
-				senderDID[:15]+"...", targetDID[:15]+"...")
+				truncDID(senderDID), truncDID(targetDID))
 		}
 
 	case "PUNCH":
@@ -463,7 +470,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			// FIX Kimi 6: verificar senderDID contra Gate
 			if !verifyGateDID(remoteAddr.String(), senderDID) {
 				fmt.Printf("[FARO-UDP] ⚠️ PUNCH rechazado: senderDID %s no coincide con Gate\n",
-					senderDID[:20]+"...")
+					truncDID(senderDID))
 				return
 			}
 
@@ -479,7 +486,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			punchCmd := fmt.Sprintf("PUNCH_NOW %s %s", senderDID, senderEntry.endpoint)
 			conn.WriteToUDP([]byte(punchCmd), targetEntry.addr)
 			fmt.Printf("[FARO] 👊 PUNCH: %s → %s (endpoint: %s)\n",
-				senderDID[:15]+"...", targetDID[:15]+"...", maskRemoteAddr(senderEntry.endpoint))
+				truncDID(senderDID), truncDID(targetDID), maskRemoteAddr(senderEntry.endpoint))
 		}
 
 	case "SESSION_ACK":
@@ -495,7 +502,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			}
 			sessionMu.Unlock()
 			fmt.Printf("[FARO] ✅ SESSION_ACK: %s ↔ %s (directo activo)\n",
-				senderDID[:15]+"...", targetDID[:15]+"...")
+				truncDID(senderDID), truncDID(targetDID))
 		}
 
 	case "CLOSE_SESSION":
@@ -508,7 +515,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			delete(sessions, key)
 			sessionMu.Unlock()
 			fmt.Printf("[FARO] 🔒 CLOSE_SESSION: %s ↔ %s\n",
-				senderDID[:15]+"...", targetDID[:15]+"...")
+				truncDID(senderDID), truncDID(targetDID))
 		}
 
 	case "RELAY":
@@ -520,7 +527,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			// FIX 6: verificar senderDID contra Gate
 			if !verifyGateDID(remoteAddr.String(), senderDID) {
 				fmt.Printf("[FARO-UDP] ⚠️ RELAY rechazado: senderDID %s no coincide con Gate\n",
-					senderDID[:20]+"...")
+					truncDID(senderDID))
 				return
 			}
 
@@ -675,7 +682,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	gateDIDsMu.Lock()
 	gateDIDs[r.RemoteAddr] = gateDID
 	gateDIDsMu.Unlock()
-	fmt.Printf("[FARO-WS] 🔑 Gate: %s autorizado desde %s\n", gateDID[:20]+"...", maskRemoteAddr(r.RemoteAddr))
+	fmt.Printf("[FARO-WS] 🔑 Gate: %s autorizado desde %s\n", truncDID(gateDID), maskRemoteAddr(r.RemoteAddr))
 
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -730,7 +737,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				// FIX Kimi 5: verificar DID contra Gate
 				if !verifyGateDID(r.RemoteAddr, did) {
 					fmt.Printf("[FARO-WS] ⚠️ ANNOUNCE rechazado: DID %s no coincide con Gate\n",
-						did[:20]+"...")
+						truncDID(did))
 					continue
 				}
 
@@ -740,7 +747,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				// FIX Kimi 10: setear wsLastClient para que RESPONSE funcione
 				wsLastClient[did] = conn
 				wsMu.Unlock()
-				fmt.Printf("[FARO-WS] 📥 ANNOUNCE: %s\n", did[:20]+"...")
+				fmt.Printf("[FARO-WS] 📥 ANNOUNCE: %s\n", truncDID(did))
 			}
 
 		case "OPEN_SESSION":
@@ -987,7 +994,14 @@ func startUDPServer(port string) {
 	for i := 0; i < numWorkers; i++ {
 		go func() {
 			for pkt := range packetChan {
-				handleUDPMessage(conn, pkt.data, pkt.addr)
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							fmt.Printf("[FARO-UDP] ⚠️ Panic recuperado: %v\n", r)
+						}
+					}()
+					handleUDPMessage(conn, pkt.data, pkt.addr)
+				}()
 			}
 		}()
 	}
