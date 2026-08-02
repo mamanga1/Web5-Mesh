@@ -693,6 +693,13 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	// FIX 7: límite de lectura para prevenir OOM
 	conn.SetReadLimit(65536)
 
+	// Rate limiting WS: misma política que UDP
+	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	if !limiter.Allow(host) {
+		conn.Close()
+		return
+	}
+
 	var myDID string
 
 	defer func() {
@@ -743,6 +750,9 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 				myDID = did
 				wsMu.Lock()
+			if old, exists := wsRegistry[did]; exists && old != conn {
+				old.Close()
+			}
 				wsRegistry[did] = conn
 				// FIX Kimi 10: setear wsLastClient para que RESPONSE funcione
 				wsLastClient[did] = conn

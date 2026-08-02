@@ -245,8 +245,10 @@ func connectUDPShell(addr string) error {
 	}
 	conn.SetReadDeadline(time.Time{})
 
+	connMu.Lock()
 	globalConn = conn
 	globalUseWS = false
+	connMu.Unlock()
 	return nil
 }
 
@@ -293,43 +295,55 @@ func connectWSShell() error {
 		return fmt.Errorf("conectando WS: %v", err)
 	}
 
+	connMu.Lock()
 	globalConnWS = wsConn
 	globalUseWS = true
+	connMu.Unlock()
 	return nil
 }
 
 func sendToFaroShell(msg string) error {
-	if globalUseWS {
-		if globalConnWS == nil {
+	connMu.Lock()
+	useWS := globalUseWS
+	connWS := globalConnWS
+	conn := globalConn
+	connMu.Unlock()
+	if useWS {
+		if connWS == nil {
 			return fmt.Errorf("no hay conexión WebSocket al faro")
 		}
-		return globalConnWS.WriteMessage(websocket.TextMessage, []byte(msg))
+		return connWS.WriteMessage(websocket.TextMessage, []byte(msg))
 	}
-	if globalConn == nil {
+	if conn == nil {
 		return fmt.Errorf("no hay conexión UDP al faro")
 	}
-	_, err := globalConn.Write([]byte(msg))
+	_, err := conn.Write([]byte(msg))
 	return err
 }
 
 func readFromFaroShell() (string, error) {
-	if globalUseWS {
-		if globalConnWS == nil {
+	connMu.Lock()
+	useWS := globalUseWS
+	connWS := globalConnWS
+	conn := globalConn
+	connMu.Unlock()
+	if useWS {
+		if connWS == nil {
 			return "", fmt.Errorf("sin conexión WS")
 		}
-		globalConnWS.SetReadDeadline(time.Now().Add(15 * time.Second))
-		_, message, err := globalConnWS.ReadMessage()
+		connWS.SetReadDeadline(time.Now().Add(15 * time.Second))
+		_, message, err := connWS.ReadMessage()
 		if err != nil {
 			return "", err
 		}
 		return string(message), nil
 	}
-	if globalConn == nil {
+	if conn == nil {
 		return "", fmt.Errorf("sin conexión UDP")
 	}
 	buf := make([]byte, 65536)
-	globalConn.SetReadDeadline(time.Now().Add(15 * time.Second))
-	n, _, err := globalConn.ReadFromUDP(buf)
+	conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+	n, _, err := conn.ReadFromUDP(buf)
 	if err != nil {
 		return "", err
 	}
