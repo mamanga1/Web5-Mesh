@@ -23,6 +23,52 @@ import (
 	"web5-mesh/src/xtp"
 )
 
+// ============================================================================
+// COLORES ANSI (sin dependencias externas)
+// ============================================================================
+const (
+	ansiReset  = "\x1b[0m"
+	ansiBold   = "\x1b[1m"
+	ansiGreen  = "\x1b[32m"
+	ansiCyan   = "\x1b[36m"
+	ansiYellow = "\x1b[33m"
+	ansiBlue   = "\x1b[34m"
+	ansiRed    = "\x1b[31m"
+	ansiGray   = "\x1b[90m"
+	ansiWhite  = "\x1b[97m"
+)
+
+// fmtMsg formatea un mensaje entrante con color y timestamp.
+// Hace que los mensajes se distingan visualmente del output de comandos.
+func fmtMsg(raw string) string {
+	ts := time.Now().Format("15:04:05")
+	tsStr := ansiGray + "[" + ts + "]" + ansiReset + " "
+
+	// Mensajes de chat: 💬 [nombre]: texto — en verde brillante
+	if strings.HasPrefix(raw, "💬 [") {
+		return tsStr + ansiBold + ansiGreen + raw + ansiReset
+	}
+	// Mensajes de grupo
+	if strings.HasPrefix(raw, "💬 [GRUPO:") {
+		return tsStr + ansiBold + ansiCyan + raw + ansiReset
+	}
+	// Eventos del sistema XTP (conexión directa, relay, etc.)
+	if strings.HasPrefix(raw, "🔐") || strings.HasPrefix(raw, "🔄") || strings.HasPrefix(raw, "💀") {
+		return tsStr + ansiBlue + raw + ansiReset
+	}
+	// Advertencias del sistema
+	if strings.HasPrefix(raw, "⚠️") {
+		return tsStr + ansiYellow + raw + ansiReset
+	}
+	// Eventos de grupo (sincronización, expulsión, etc.)
+	if strings.HasPrefix(raw, "🔄 [SISTEMA]") || strings.HasPrefix(raw, "🗑️") ||
+		strings.HasPrefix(raw, "👢") || strings.HasPrefix(raw, "👋") {
+		return tsStr + ansiYellow + raw + ansiReset
+	}
+	// Resto: sin color pero con timestamp
+	return tsStr + raw
+}
+
 func restoreTerminal() {
 	fmt.Print("\x1b[?12l")
 	fmt.Print("\x1b[?25h")
@@ -116,16 +162,26 @@ func completer(d prompt.Document) []prompt.Suggest {
 }
 
 var (
-	connMu         sync.Mutex
-	globalConn     *net.UDPConn
-	globalConnWS   *websocket.Conn
-	globalUseWS    bool
-	globalACLIndex map[[4]byte]peerKeys
-	globalID       *crypto.Identity
-	globalFaroAddr string
-	globalQuit     chan struct{}
-	msgChan        = make(chan string, 100)
-	cmdHistory     []string
+	// FIX 1: connMu protege TODO el estado de conexión.
+	// Se usa en sendToFaroShell, readFromFaroShell, startNetworkListener
+	// y startWatchdog para evitar races entre goroutines.
+	connMu       sync.Mutex
+	globalConn   *net.UDPConn
+	globalConnWS *websocket.Conn
+	globalUseWS  bool
+
+	globalACLIndex  map[[4]byte]peerKeys
+	globalID        *crypto.Identity
+	globalFaroAddr  string
+	globalQuit      chan struct{}
+	globalQuitOnce  sync.Once // FIX 3: evita close() doble de globalQuit
+
+	// FIX 2: msgChan con capacidad generosa; la goroutine lectora
+	// vive mientras el proceso vive (no se cierra el canal al salir,
+	// el proceso termina con return).
+	msgChan         = make(chan string, 256)
+
+	cmdHistory      []string
 	activeRecipient string
 	msgHistory      map[string][]string
 	lastPublicIP    string
@@ -277,12 +333,9 @@ func connectWSShell() error {
 
 	wsURL := fmt.Sprintf("wss://%s/ws", wsHost)
 
-	// FIX 1: InsecureSkipVerify en false por defecto (anti-MITM).
-	// Si el faro usa certs self-signed, setear XION_INSECURE_WS=1
-	// como variable de entorno (solo para desarrollo/testing).
 	insecureWS := os.Getenv("XION_INSECURE_WS") == "1"
 	if insecureWS {
-		fmt.Println("⚠️ [WS] XION_INSECURE_WS=1 — TLS sin verificar (solo desarrollo)")
+		fmt.Println(ansiYellow + "⚠️ [WS] XION_INSECURE_WS=1 — TLS sin verificar (solo desarrollo)" + ansiReset)
 	}
 
 	dialer := websocket.Dialer{
@@ -308,6 +361,7 @@ func sendToFaroShell(msg string) error {
 	connWS := globalConnWS
 	conn := globalConn
 	connMu.Unlock()
+
 	if useWS {
 		if connWS == nil {
 			return fmt.Errorf("no hay conexión WebSocket al faro")
@@ -327,10 +381,12 @@ func readFromFaroShell() (string, error) {
 	connWS := globalConnWS
 	conn := globalConn
 	connMu.Unlock()
+
 	if useWS {
 		if connWS == nil {
 			return "", fmt.Errorf("sin conexión WS")
 		}
+		// FIX: SetReadDeadline en WS (antes faltaba, UDP sí tenía 15s)
 		connWS.SetReadDeadline(time.Now().Add(15 * time.Second))
 		_, message, err := connWS.ReadMessage()
 		if err != nil {
@@ -353,13 +409,16 @@ func readFromFaroShell() (string, error) {
 func startNetworkListener() {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("\n⚠️ Listener recuperado: %v — reconectando...\n", r)
+			msgChan <- fmt.Sprintf(ansiYellow+"⚠️ Listener recuperado: %v — reconectando..."+ansiReset, r)
 			time.Sleep(2 * time.Second)
 			go startNetworkListener()
 		}
 	}()
 
-	if !globalUseWS && globalConn == nil {
+	connMu.Lock()
+	hasConn := globalConn != nil || globalConnWS != nil
+	connMu.Unlock()
+	if !hasConn {
 		return
 	}
 
@@ -368,159 +427,182 @@ func startNetworkListener() {
 		case <-globalQuit:
 			return
 		default:
-			raw, err := readFromFaroShell()
-			if err != nil {
-				if !globalUseWS && globalConn != nil {
-					globalConn.Close()
-					globalConn = nil
-				}
-				if globalUseWS && globalConnWS != nil {
-					globalConnWS.Close()
-					globalConnWS = nil
-				}
-				time.Sleep(2 * time.Second)
-				if err := connectToFaroShell(); err != nil {
-					continue
-				}
-				continue
-			}
-
-			touchActivity()
-			raw = stripPadding(raw)
-			raw = extractPayload(raw)
-
-			if globalTM != nil && globalTM.HandleIncoming(raw) {
-				continue
-			}
-
-			if strings.HasPrefix(raw, "ACK_IP ") {
-				parts := strings.SplitN(raw, " ", 2)
-				if len(parts) == 2 {
-					currentPublicIP := parts[1]
-					if lastPublicIP != "" && lastPublicIP != currentPublicIP {
-						fmt.Printf("🔄 IP pública cambió: %s → %s\n", lastPublicIP, currentPublicIP)
-						ts := fmt.Sprintf("%d", time.Now().Unix())
-						sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
-						msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
-						sendToFaroShell(addPadding(msg))
-					}
-					lastPublicIP = currentPublicIP
-				}
-				continue
-			}
-
-			if strings.HasPrefix(raw, "ACK") {
-				continue
-			}
-
-			parts := strings.SplitN(raw, "|", 2)
-			if len(parts) != 2 {
-				continue
-			}
-			kidBytes, err := hex.DecodeString(parts[0])
-			if err != nil || len(kidBytes) != 4 {
-				continue
-			}
-			var kid [4]byte
-			copy(kid[:], kidBytes)
-
-			peer, exists := globalACLIndex[kid]
-			if !exists {
-				continue
-			}
-
-			ciphertext, err := base64.StdEncoding.DecodeString(parts[1])
-			if err != nil {
-				continue
-			}
-			plaintext, err := crypto.DecryptPayload(peer.SharedKey, ciphertext)
-			if err != nil {
-				continue
-			}
-
-			var inner InnerPayload
-			if json.Unmarshal(plaintext, &inner) != nil {
-				continue
-			}
-
-			innerForVerify := inner
-			innerForVerify.Sig = ""
-			verifyJSON, _ := json.Marshal(innerForVerify)
-			sigBytes, _ := base64.StdEncoding.DecodeString(inner.Sig)
-			if !crypto.VerifyMessage(peer.PubKeyEd, verifyJSON, sigBytes) {
-				continue
-			}
-
-			if time.Now().Unix()-inner.TS > 60 {
-				continue
-			}
-
-			displayName := crypto.ResolveDID(peer.DID)
-
-			if strings.HasPrefix(inner.Cmd, "GROUP_SYNC:") {
-				parts := strings.SplitN(inner.Cmd, ":", 3)
-				if len(parts) == 3 {
-					alias := parts[1]
-					var group crypto.Group
-					if json.Unmarshal([]byte(parts[2]), &group) == nil {
-						// FIX Kimi 14: verificar que el sender sea el admin del grupo
-						if group.Admin != inner.FromDID {
-							msgChan <- fmt.Sprintf("⚠️ [SISTEMA] GROUP_SYNC rechazado: %s no es admin de '%s'", displayName, alias)
-						} else {
-							crypto.SaveGroupDirect(alias, &group)
-							msgChan <- fmt.Sprintf("🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)", alias, len(group.Members))
-						}
-					}
-				}
-				continue
-			}
-
-			if strings.HasPrefix(inner.Cmd, "GROUP_DELETE:") {
-				parts := strings.SplitN(inner.Cmd, ":", 2)
-				if len(parts) == 2 {
-					alias := parts[1]
-					crypto.DeleteGroup(alias)
-					msgChan <- fmt.Sprintf("🗑️ [SISTEMA] Grupo '%s' eliminado por el admin", alias)
-				}
-				continue
-			}
-
-			if strings.HasPrefix(inner.Cmd, "GROUP_KICKED:") {
-				parts := strings.SplitN(inner.Cmd, ":", 2)
-				if len(parts) == 2 {
-					alias := parts[1]
-					crypto.RemoveMember(alias, globalID.DID)
-					msgChan <- fmt.Sprintf("👢 [SISTEMA] Fuiste expulsado del grupo '%s'", alias)
-				}
-				continue
-			}
-
-			if strings.HasPrefix(inner.Cmd, "GROUP_LEAVE:") {
-				parts := strings.SplitN(inner.Cmd, ":", 3)
-				if len(parts) == 3 {
-					alias := parts[1]
-					did := parts[2]
-					crypto.RemoveMember(alias, did)
-					msgChan <- fmt.Sprintf("👋 [SISTEMA] %s salió del grupo '%s'", displayName, alias)
-				}
-				continue
-			}
-
-			if strings.HasPrefix(inner.Cmd, "GROUP:") {
-				parts := strings.SplitN(inner.Cmd, ":", 3)
-				if len(parts) == 3 {
-					msgChan <- fmt.Sprintf("💬 [GRUPO:%s] [%s]: %s", parts[1], displayName, parts[2])
-					continue
-				}
-			}
-
-			msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, inner.Cmd)
 		}
+
+		raw, err := readFromFaroShell()
+		if err != nil {
+			select {
+			case <-globalQuit:
+				return
+			default:
+			}
+
+			// FIX 1: cerrar conexiones bajo connMu
+			connMu.Lock()
+			useWS := globalUseWS
+			if !useWS && globalConn != nil {
+				globalConn.Close()
+				globalConn = nil
+			}
+			if useWS && globalConnWS != nil {
+				globalConnWS.Close()
+				globalConnWS = nil
+			}
+			connMu.Unlock()
+
+			time.Sleep(2 * time.Second)
+			if err := connectToFaroShell(); err != nil {
+				continue
+			}
+
+			// FIX 6: notificar al TM que el faro reconectó
+			if globalTM != nil {
+				globalTM.FSM().Send(xtp.EvFaroConnected, nil)
+				globalTM.FSM().Send(xtp.EvAnnounceSent, nil)
+			}
+			continue
+		}
+
+		touchActivity()
+		raw = stripPadding(raw)
+		raw = extractPayload(raw)
+
+		if globalTM != nil && globalTM.HandleIncoming(raw) {
+			continue
+		}
+
+		if strings.HasPrefix(raw, "ACK_IP ") {
+			parts := strings.SplitN(raw, " ", 2)
+			if len(parts) == 2 {
+				currentPublicIP := parts[1]
+				if lastPublicIP != "" && lastPublicIP != currentPublicIP {
+					msgChan <- fmt.Sprintf(ansiGray+"🔄 IP pública cambió: %s → %s"+ansiReset, lastPublicIP, currentPublicIP)
+					ts := fmt.Sprintf("%d", time.Now().Unix())
+					sig := base64.StdEncoding.EncodeToString(globalID.SignMessage([]byte(ts)))
+					msg := fmt.Sprintf("ANNOUNCE %s %s %s", globalID.DID, ts, sig)
+					sendToFaroShell(addPadding(msg))
+				}
+				lastPublicIP = currentPublicIP
+			}
+			continue
+		}
+
+		if strings.HasPrefix(raw, "ACK") {
+			continue
+		}
+
+		parts := strings.SplitN(raw, "|", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		kidBytes, err := hex.DecodeString(parts[0])
+		if err != nil || len(kidBytes) != 4 {
+			continue
+		}
+		var kid [4]byte
+		copy(kid[:], kidBytes)
+
+		peer, exists := globalACLIndex[kid]
+		if !exists {
+			continue
+		}
+
+		ciphertext, err := base64.StdEncoding.DecodeString(parts[1])
+		if err != nil {
+			continue
+		}
+		plaintext, err := crypto.DecryptPayload(peer.SharedKey, ciphertext)
+		if err != nil {
+			continue
+		}
+
+		var inner InnerPayload
+		if json.Unmarshal(plaintext, &inner) != nil {
+			continue
+		}
+
+		innerForVerify := inner
+		innerForVerify.Sig = ""
+		verifyJSON, _ := json.Marshal(innerForVerify)
+		sigBytes, _ := base64.StdEncoding.DecodeString(inner.Sig)
+		if !crypto.VerifyMessage(peer.PubKeyEd, verifyJSON, sigBytes) {
+			continue
+		}
+
+		if time.Now().Unix()-inner.TS > 60 {
+			continue
+		}
+
+		displayName := crypto.ResolveDID(peer.DID)
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_SYNC:") {
+			parts := strings.SplitN(inner.Cmd, ":", 3)
+			if len(parts) == 3 {
+				alias := parts[1]
+				var group crypto.Group
+				if json.Unmarshal([]byte(parts[2]), &group) == nil {
+					if group.Admin != inner.FromDID {
+						msgChan <- fmt.Sprintf("⚠️ [SISTEMA] GROUP_SYNC rechazado: %s no es admin de '%s'", displayName, alias)
+					} else {
+						crypto.SaveGroupDirect(alias, &group)
+						msgChan <- fmt.Sprintf("🔄 [SISTEMA] Grupo '%s' sincronizado (miembros: %d)", alias, len(group.Members))
+					}
+				}
+			}
+			continue
+		}
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_DELETE:") {
+			parts := strings.SplitN(inner.Cmd, ":", 2)
+			if len(parts) == 2 {
+				alias := parts[1]
+				crypto.DeleteGroup(alias)
+				msgChan <- fmt.Sprintf("🗑️ [SISTEMA] Grupo '%s' eliminado por el admin", alias)
+			}
+			continue
+		}
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_KICKED:") {
+			parts := strings.SplitN(inner.Cmd, ":", 2)
+			if len(parts) == 2 {
+				alias := parts[1]
+				crypto.RemoveMember(alias, globalID.DID)
+				msgChan <- fmt.Sprintf("👢 [SISTEMA] Fuiste expulsado del grupo '%s'", alias)
+			}
+			continue
+		}
+
+		if strings.HasPrefix(inner.Cmd, "GROUP_LEAVE:") {
+			parts := strings.SplitN(inner.Cmd, ":", 3)
+			if len(parts) == 3 {
+				alias := parts[1]
+				did := parts[2]
+				crypto.RemoveMember(alias, did)
+				msgChan <- fmt.Sprintf("👋 [SISTEMA] %s salió del grupo '%s'", displayName, alias)
+			}
+			continue
+		}
+
+		if strings.HasPrefix(inner.Cmd, "GROUP:") {
+			parts := strings.SplitN(inner.Cmd, ":", 3)
+			if len(parts) == 3 {
+				msgChan <- fmt.Sprintf("💬 [GRUPO:%s] [%s]: %s", parts[1], displayName, parts[2])
+				continue
+			}
+		}
+
+		msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, inner.Cmd)
 	}
 }
 
 func startAnnounceLoop() {
-	for globalConn == nil && globalConnWS == nil {
+	for {
+		connMu.Lock()
+		hasConn := globalConn != nil || globalConnWS != nil
+		connMu.Unlock()
+		if hasConn {
+			break
+		}
 		select {
 		case <-globalQuit:
 			return
@@ -537,7 +619,10 @@ func startAnnounceLoop() {
 		case <-globalQuit:
 			return
 		case <-ticker.C:
-			if globalConn == nil && globalConnWS == nil {
+			connMu.Lock()
+			hasConn := globalConn != nil || globalConnWS != nil
+			connMu.Unlock()
+			if !hasConn {
 				continue
 			}
 			ts := fmt.Sprintf("%d", time.Now().Unix())
@@ -560,16 +645,21 @@ func startWatchdog() {
 			return
 		case <-ticker.C:
 			if stale := staleSince(); stale > 20*time.Second {
-				fmt.Printf("\n⚠️ [WATCHDOG] Sin actividad hace %v, reconectando...\n", stale)
+				msgChan <- fmt.Sprintf(ansiYellow+"⚠️ [WATCHDOG] Sin actividad hace %v, reconectando..."+ansiReset,
+					stale.Round(time.Second))
 
-				if !globalUseWS && globalConn != nil {
+				// FIX 1: cerrar bajo connMu
+				connMu.Lock()
+				useWS := globalUseWS
+				if !useWS && globalConn != nil {
 					globalConn.Close()
 					globalConn = nil
 				}
-				if globalUseWS && globalConnWS != nil {
+				if useWS && globalConnWS != nil {
 					globalConnWS.Close()
 					globalConnWS = nil
 				}
+				connMu.Unlock()
 
 				if err := connectToFaroShell(); err == nil {
 					ts := fmt.Sprintf("%d", time.Now().Unix())
@@ -582,9 +672,9 @@ func startWatchdog() {
 						globalTM.FSM().Send(xtp.EvFaroConnected, nil)
 						globalTM.FSM().Send(xtp.EvAnnounceSent, nil)
 					}
-					fmt.Println("✅ [WATCHDOG] Reconectado y ANNOUNCE enviado")
+					msgChan <- ansiGreen + "✅ [WATCHDOG] Reconectado y ANNOUNCE enviado" + ansiReset
 				} else {
-					fmt.Printf("❌ [WATCHDOG] Reconexión falló: %v\n", err)
+					msgChan <- fmt.Sprintf(ansiRed+"❌ [WATCHDOG] Reconexión falló: %v"+ansiReset, err)
 				}
 			}
 		}
@@ -603,9 +693,11 @@ func runInteractiveShell() {
 	crypto.SetSelfDID(globalID.DID)
 
 	globalFaroAddr = getFaroAddr()
+	// FIX 3: globalQuit con once para evitar double-close
 	globalQuit = make(chan struct{})
+	globalQuitOnce = sync.Once{}
 
-	if err := connectToFaroShell(); err != nil {
+	if err = connectToFaroShell(); err != nil {
 		fmt.Printf("⚠️ No se pudo conectar al faro: %v\n", err)
 	}
 
@@ -623,7 +715,6 @@ func runInteractiveShell() {
 						alias := parts[1]
 						var group crypto.Group
 						if json.Unmarshal([]byte(parts[2]), &group) == nil {
-							// FIX Kimi 14: verificar que el sender sea el admin del grupo
 							if group.Admin != peerDID {
 								msgChan <- fmt.Sprintf("⚠️ [SISTEMA] GROUP_SYNC rechazado: %s no es admin de '%s'", displayName, alias)
 							} else {
@@ -634,7 +725,6 @@ func runInteractiveShell() {
 					}
 					return
 				}
-
 				if strings.HasPrefix(command, "GROUP_DELETE:") {
 					parts := strings.SplitN(command, ":", 2)
 					if len(parts) == 2 {
@@ -643,7 +733,6 @@ func runInteractiveShell() {
 					}
 					return
 				}
-
 				if strings.HasPrefix(command, "GROUP_KICKED:") {
 					parts := strings.SplitN(command, ":", 2)
 					if len(parts) == 2 {
@@ -652,7 +741,6 @@ func runInteractiveShell() {
 					}
 					return
 				}
-
 				if strings.HasPrefix(command, "GROUP_LEAVE:") {
 					parts := strings.SplitN(command, ":", 3)
 					if len(parts) == 3 {
@@ -661,7 +749,6 @@ func runInteractiveShell() {
 					}
 					return
 				}
-
 				if strings.HasPrefix(command, "GROUP:") {
 					parts := strings.SplitN(command, ":", 3)
 					if len(parts) == 3 {
@@ -669,8 +756,9 @@ func runInteractiveShell() {
 						return
 					}
 				}
-
-				msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, command)
+				// Limpiar prefijo CHAT: antes de mostrar
+				displayCmd := strings.TrimPrefix(command, "CHAT:")
+				msgChan <- fmt.Sprintf("💬 [%s]: %s", displayName, displayCmd)
 			},
 			OnDirectSessionActive: func(peerDID string) {
 				msgChan <- fmt.Sprintf("🔐 [XTP] Conexión directa con %s (Noise IK, forward secrecy)", peerDID[:20]+"...")
@@ -682,7 +770,7 @@ func runInteractiveShell() {
 				msgChan <- fmt.Sprintf("🔄 [XTP] Usando relay con %s (hole punching falló)", peerDID[:20]+"...")
 			},
 			OnError: func(context string, err error) {
-				fmt.Printf("[XTP] ⚠️ Error en %s: %v\n", context, err)
+				xtp.Debugf("[XTP] ⚠️ Error en %s: %v\n", context, err)
 			},
 		},
 		xtp.DefaultManagerConfig(),
@@ -696,28 +784,33 @@ func runInteractiveShell() {
 		}
 	}
 
-	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-	fmt.Println(" XION KERNEL v1.0.0 | Modo Seguro: ON")
-	fmt.Println(" 🆔 TU IDENTIDAD:")
-	fmt.Println(" DID: " + globalID.DID)
+	// ── Banner de bienvenida con colores ──────────────────────────────────
 	pubEdHex := hex.EncodeToString(globalID.PubKeyEd)
 	pubXHex := hex.EncodeToString(globalID.PubKeyX[:])
-	fmt.Println(" PubKey Ed: " + pubEdHex)
-	fmt.Println(" PubKey X: " + pubXHex)
+
+	fmt.Println(ansiBold + ansiCyan + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ansiReset)
+	fmt.Println(ansiBold + " XION KERNEL v1.0.0 | Modo Seguro: " + ansiGreen + "ON" + ansiReset)
+	fmt.Println(ansiBold + ansiWhite + " 🆔 TU IDENTIDAD:" + ansiReset)
+	fmt.Println(ansiCyan + " DID:     " + ansiReset + globalID.DID)
+	fmt.Println(ansiGray + " PubEd:   " + pubEdHex + ansiReset)
+	fmt.Println(ansiGray + " PubX:    " + pubXHex + ansiReset)
 	fmt.Println()
-	fmt.Println(" 📋 Para que otro nodo te agregue, decile que ejecute:")
-	fmt.Printf(" acl import %s %s %s\n", globalID.DID, pubEdHex, pubXHex)
-	fmt.Printf(" alias add %s\n", globalID.DID)
+	fmt.Println(ansiBold + " 📋 Para agregar este nodo, decile a otro que ejecute:" + ansiReset)
+	fmt.Printf(ansiYellow+" acl import %s %s %s\n"+ansiReset, globalID.DID, pubEdHex, pubXHex)
 	fmt.Println()
 	if globalFaroAddr != "" {
-		if globalUseWS {
-			fmt.Printf(" 📡 Faro activo: %s (WSS último recurso)\n", globalFaroAddr)
+		connMu.Lock()
+		useWS := globalUseWS
+		connMu.Unlock()
+		if useWS {
+			fmt.Printf(ansiGreen+" 📡 Faro activo: %s (WSS)\n"+ansiReset, globalFaroAddr)
 		} else {
-			fmt.Printf(" 📡 Faro activo: %s (UDP)\n", globalFaroAddr)
+			fmt.Printf(ansiGreen+" 📡 Faro activo: %s (UDP)\n"+ansiReset, globalFaroAddr)
 		}
 	} else {
-		fmt.Println(" 📡 Faro: NO CONFIGURADO")
+		fmt.Println(ansiRed + " 📡 Faro: NO CONFIGURADO" + ansiReset)
 	}
+	fmt.Println(ansiBold + ansiCyan + "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" + ansiReset)
 
 	cmdHistory = []string{}
 	msgHistory = make(map[string][]string)
@@ -726,6 +819,7 @@ func runInteractiveShell() {
 	go startAnnounceLoop()
 	go startWatchdog()
 
+	// Retry ANNOUNCE a los 3s (el faro puede estar procesando el handshake)
 	go func() {
 		select {
 		case <-globalQuit:
@@ -740,16 +834,19 @@ func runInteractiveShell() {
 		}
 	}()
 
+	// Goroutine que imprime mensajes del bus con colores
 	go func() {
 		for msg := range msgChan {
-			fmt.Print("\r\x1b[K")
-			fmt.Println(msg)
+			fmt.Print("\r\x1b[K") // limpiar línea actual del prompt
+			fmt.Println(fmtMsg(msg))
 			fmt.Print("xion@nodo:~$ ")
 		}
 	}()
 
 	for {
-		input := prompt.Input("xion@nodo:~$ ", completer,
+		input := prompt.Input(
+			"xion@nodo:~$ ",
+			completer,
 			prompt.OptionPrefixTextColor(prompt.Yellow),
 			prompt.OptionInputTextColor(prompt.White),
 			prompt.OptionSuggestionBGColor(prompt.DarkGray),
@@ -770,7 +867,7 @@ func runInteractiveShell() {
 
 		if input == "debug on" {
 			xtp.DebugMode = true
-			fmt.Println("✅ Debug ON")
+			fmt.Println(ansiGreen + "✅ Debug ON" + ansiReset)
 			continue
 		}
 		if input == "debug off" {
@@ -778,16 +875,17 @@ func runInteractiveShell() {
 			fmt.Println("✅ Debug OFF")
 			continue
 		}
+
 		if input == "xtp" || input == "xtp status" {
 			if globalTM == nil {
-				fmt.Println("❌ TransportManager no inicializado")
+				fmt.Println(ansiRed + "❌ TransportManager no inicializado" + ansiReset)
 				continue
 			}
 			stats := globalTM.Stats()
-			fmt.Println(" 📊 XTP Transport Manager")
-			fmt.Printf(" Estado FSM: %s\n", stats.FSMState)
-			fmt.Printf(" Sesiones directas: %d\n", stats.DirectSessions)
-			fmt.Printf(" Relay activo: %v\n", !stats.RelayClosed)
+			fmt.Println(ansiBold + " 📊 XTP Transport Manager" + ansiReset)
+			fmt.Printf(ansiCyan+" Estado FSM:       "+ansiReset+"%s\n", stats.FSMState)
+			fmt.Printf(ansiCyan+" Sesiones directas:"+ansiReset+" %d\n", stats.DirectSessions)
+			fmt.Printf(ansiCyan+" Relay activo:     "+ansiReset+"%v\n", !stats.RelayClosed)
 			continue
 		}
 
@@ -801,18 +899,17 @@ func runInteractiveShell() {
 					targetDID = target
 				}
 				if globalTM == nil {
-					fmt.Println("❌ TransportManager no inicializado")
+					fmt.Println(ansiRed + "❌ TransportManager no inicializado" + ansiReset)
 					continue
 				}
 				transport, err := globalTM.Send(targetDID, "CHAT:"+msg)
 				if err != nil {
-					fmt.Printf("❌ Error enviando por XTP: %v\n", err)
+					fmt.Printf(ansiRed+"❌ Error enviando por XTP: %v\n"+ansiReset, err)
 				} else {
-					fmt.Printf("📤 Enviado por %s → %s\n", transport, targetDID[:20]+"...")
+					fmt.Printf(ansiGreen+"📤 Enviado por %s → %s\n"+ansiReset, transport, targetDID[:20]+"...")
 				}
 			} else {
 				fmt.Println("Uso: xtp <did|alias> <mensaje>")
-				fmt.Println("Ejemplo: xtp juan hola mundo")
 			}
 			continue
 		}
@@ -828,21 +925,21 @@ func runInteractiveShell() {
 					alias := strings.TrimPrefix(target, "group:")
 					activeRecipient = "group:" + alias
 					if history, ok := msgHistory[alias]; ok && len(history) > 0 {
-						fmt.Printf("📜 Historial de mensajes con grupo '%s':\n", alias)
+						fmt.Printf("📜 Historial con grupo '%s':\n", alias)
 						for i, msg := range history {
-							fmt.Printf(" %d. %s\n", i+1, msg)
+							fmt.Printf("  %d. %s\n", i+1, msg)
 						}
 					}
-					fmt.Printf("📡 Modo grupo '%s'. Escribí y dale Enter.\n", alias)
+					fmt.Printf(ansiCyan+"📡 Modo grupo '%s'. Escribí y dale Enter.\n"+ansiReset, alias)
 				} else {
 					activeRecipient = "chat:" + target
 					if history, ok := msgHistory[target]; ok && len(history) > 0 {
-						fmt.Printf("📜 Historial de mensajes con '%s':\n", target)
+						fmt.Printf("📜 Historial con '%s':\n", target)
 						for i, msg := range history {
-							fmt.Printf(" %d. %s\n", i+1, msg)
+							fmt.Printf("  %d. %s\n", i+1, msg)
 						}
 					}
-					fmt.Printf("📡 Modo chat con '%s'. Escribí y dale Enter.\n", target)
+					fmt.Printf(ansiCyan+"📡 Modo chat con '%s'. Escribí y dale Enter.\n"+ansiReset, target)
 				}
 			} else if len(parts) == 3 {
 				target := strings.TrimSpace(parts[1])
@@ -852,11 +949,11 @@ func runInteractiveShell() {
 					if _, ok := msgHistory[target]; !ok {
 						msgHistory[target] = []string{}
 					}
-					fmt.Printf("📡 Modo chat con '%s' (historial activado). Escribí y dale Enter.\n", target)
+					fmt.Printf(ansiCyan+"📡 Modo chat con '%s' (historial activado).\n"+ansiReset, target)
 				} else if flag == "off" {
 					activeRecipient = "chat:" + target
 					delete(msgHistory, target)
-					fmt.Printf("📡 Modo chat con '%s' (historial desactivado).\n", target)
+					fmt.Printf(ansiCyan+"📡 Modo chat con '%s' (historial desactivado).\n"+ansiReset, target)
 				} else {
 					fmt.Printf("⚠️ Uso: /to <alias> [on|off] o /to off\n")
 				}
@@ -894,15 +991,17 @@ func runInteractiveShell() {
 			if globalTM != nil {
 				globalTM.Close()
 			}
-			close(globalQuit)
-			// msgChan no se cierra: el proceso termina con return
+			// FIX 3: close seguro con Once
+			globalQuitOnce.Do(func() { close(globalQuit) })
+			connMu.Lock()
 			if globalUseWS && globalConnWS != nil {
 				globalConnWS.Close()
 			}
 			if !globalUseWS && globalConn != nil {
 				globalConn.Close()
 			}
-			fmt.Println("🧹 Historial de comandos y mensajes eliminado (privacidad total).")
+			connMu.Unlock()
+			fmt.Println("🧹 Historial eliminado (privacidad total).")
 			return
 		}
 

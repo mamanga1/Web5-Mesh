@@ -7,13 +7,25 @@ import (
 	"sync"
 )
 
-const groupsFile = ".xion/groups.json"
+// FIX: respetar $XION_HOME igual que acl.go y alias.go.
+// Antes usaba ".xion/groups.json" hardcodeado relativo al directorio
+// de ejecución, ignorando XION_HOME — rompía en Android/mobile.
+func getGroupsFile() string {
+	if home := os.Getenv("XION_HOME"); home != "" {
+		return filepath.Join(home, "groups.json")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".xion", "groups.json")
+	}
+	return filepath.Join(home, ".xion", "groups.json")
+}
 
 type Group struct {
-	Name     string   `json:"name"`
-	Members  []string `json:"members"`
-	Admin    string   `json:"admin"`
-	Created  string   `json:"created"`
+	Name    string   `json:"name"`
+	Members []string `json:"members"`
+	Admin   string   `json:"admin"`
+	Created string   `json:"created"`
 }
 
 type GroupStore struct {
@@ -24,11 +36,6 @@ type GroupStore struct {
 var groupCache *GroupStore
 var groupOnce sync.Once
 
-func getGroupsPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, groupsFile)
-}
-
 func LoadGroups() (*GroupStore, error) {
 	groupOnce.Do(func() {
 		groupCache = &GroupStore{
@@ -36,7 +43,7 @@ func LoadGroups() (*GroupStore, error) {
 		}
 	})
 
-	path := getGroupsPath()
+	path := getGroupsFile()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -48,12 +55,17 @@ func LoadGroups() (*GroupStore, error) {
 	if err := json.Unmarshal(data, groupCache); err != nil {
 		return nil, err
 	}
+	if groupCache.Groups == nil {
+		groupCache.Groups = make(map[string]*Group)
+	}
 	return groupCache, nil
 }
 
 func SaveGroups(store *GroupStore) error {
-	path := getGroupsPath()
-	os.MkdirAll(filepath.Dir(path), 0700)
+	path := getGroupsFile()
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(store, "", "  ")
 	if err != nil {
 		return err
@@ -135,7 +147,6 @@ func GetGroup(alias string) (*Group, bool) {
 	return group, exists
 }
 
-// SaveGroupDirect guarda un grupo completo (para sincronización entre nodos)
 func SaveGroupDirect(alias string, group *Group) error {
 	store, err := LoadGroups()
 	if err != nil {
@@ -147,7 +158,6 @@ func SaveGroupDirect(alias string, group *Group) error {
 	return SaveGroups(store)
 }
 
-// DeleteGroup elimina un grupo por alias (exportada para uso desde commands y shell)
 func DeleteGroup(alias string) error {
 	store, err := LoadGroups()
 	if err != nil {
