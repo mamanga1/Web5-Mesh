@@ -116,6 +116,7 @@ func completer(d prompt.Document) []prompt.Suggest {
 }
 
 var (
+	connMu         sync.Mutex
 	globalConn     *net.UDPConn
 	globalConnWS   *websocket.Conn
 	globalUseWS    bool
@@ -316,6 +317,7 @@ func readFromFaroShell() (string, error) {
 		if globalConnWS == nil {
 			return "", fmt.Errorf("sin conexión WS")
 		}
+		globalConnWS.SetReadDeadline(time.Now().Add(15 * time.Second))
 		_, message, err := globalConnWS.ReadMessage()
 		if err != nil {
 			return "", err
@@ -879,7 +881,7 @@ func runInteractiveShell() {
 				globalTM.Close()
 			}
 			close(globalQuit)
-			close(msgChan)
+			// msgChan no se cierra: el proceso termina con return
 			if globalUseWS && globalConnWS != nil {
 				globalConnWS.Close()
 			}

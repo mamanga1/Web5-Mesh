@@ -819,6 +819,10 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				targetDID := stripPadding(parts[1])
 				senderDID := stripPadding(parts[2])
 
+				if !verifyGateDID(r.RemoteAddr, senderDID) {
+					continue
+				}
+
 				key := sessionKey(senderDID, targetDID)
 				sessionMu.Lock()
 				if s, ok := sessions[key]; ok {
@@ -832,6 +836,10 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if len(parts) >= 3 {
 				targetDID := stripPadding(parts[1])
 				senderDID := stripPadding(parts[2])
+
+				if !verifyGateDID(r.RemoteAddr, senderDID) {
+					continue
+				}
 
 				key := sessionKey(senderDID, targetDID)
 				sessionMu.Lock()
@@ -1082,6 +1090,13 @@ func startCleaner() {
 		}
 		sessionMu.Unlock()
 
+		gateDIDsMu.Lock()
+		for addr := range gateDIDs {
+			if !faroGate.IsAllowed(addr) {
+				delete(gateDIDs, addr)
+			}
+		}
+		gateDIDsMu.Unlock()
 		if expired > 0 {
 			fmt.Printf("[FARO] 🗑️ Cleaner: %d entrada(s) expirada(s)\n", expired)
 		}
