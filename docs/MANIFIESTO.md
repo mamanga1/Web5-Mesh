@@ -123,7 +123,7 @@ Kademlia y las DHTs son pesadas y burocráticas. XionIA usa un Faro de Registro 
 
 4. **Privacidad por Omisión:** Ningún dato de usuario se almacena en el Faro. El Faro es un puente ciego; si es hackeado, el atacante no obtiene nada porque todo el payload ya viene cifrado de punta a punta.
 
-5. **El Host es un Medio Hostil:** Todo lo que toca el sistema operativo puede estar comprometido. Por eso XionIA crea la **Jaula de Faraday** (`~/.u2p/workspace/`), un espacio aislado donde los archivos sensibles viven blindados, separados del código fuente y del sistema de archivos del host. Los permisos son `0600` (solo el dueño puede leer/escribir). El host es considerado hostil por diseño.
+5. **El Host es un Medio Hostil:** Todo lo que toca el sistema operativo puede estar comprometido. Por eso XionIA crea la **Jaula de Faraday** (`.xion/`), un espacio aislado donde los archivos sensibles viven blindados, separados del código fuente y del sistema de archivos del host. Los permisos son `0600` (solo el dueño puede leer/escribir). El host es considerado hostil por diseño.
 
 ---
 
@@ -169,9 +169,9 @@ Instituciones que necesitan comunicación cifrada + auditable + sin terceros. Xi
 - Shell interactiva
 - Multiplataforma (Linux, macOS, Windows, Android/Termux)
 - Optimización ARM64 (TV Boxes, Raspberry Pi)
-- NAT Traversal
+- - NAT Traversal via Faro (relay) — hole punching directo en Fase 2
 
-### Fase 2: Escalabilidad
+### Fase 2: Escalabilidad En desarrollo activo en xionia-kernel (próximamente público).
 - **Directorio de Identidad Opcional**: Los usuarios que elijan identificarse públicamente pueden registrarse con DID + alias. Sus comunicaciones siguen siendo 100% privadas (E2E). La soberanía no está en esconder quién sos, sino en que nadie vea lo que hacés.
 - **Web of Trust + DID Resolution**: Descubrimiento automático de nodos. Escalamos sin gestión manual de ACLs.
 - **Faros Inteligentes**: Títulos, banners, descubrimiento global, multi-Faro.
