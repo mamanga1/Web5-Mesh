@@ -251,18 +251,12 @@ flutter build apk --release
 
 | Fase | Estado | Contenido |
 |------|--------|-----------|
-| **Fase 1** | 🔒 Congelada (v1.0) | Crypto, ACL, faro dual, shell, jaula, grupos, XionChat |
-| **Fase 2** | ❌ Pendiente de diseño | U2P, hosting, navegador, IA colaborativa *(requiere RFCs)* |
-| **Fase 3** | ❌ Visión | XPT (Jami++), audio E2E, Xion Console, Swarm |
-
----
-
-## 9. Licencia
-
-XionIA Faraday es software libre. La soberanía no se licencia; se ejerce.
+| **Fase 1** | 🔒 Congelada (v1.0.1) | Crypto, ACL, faro dual, shell, jaula, grupos, XionChat |
+| **Fase 2** | ❌ Pendiente de diseño | 🔄 En desarrollo en xionia-kernel (próximamente público). Sprint 1+2 completados: TransportManager, Noise IK, DirectTransport, Faro signaling puro — 95 tests. |
+| **Fase 3** | ❌ Visión | audio E2E, Xion Console, Swarm, etc |
 
 ---
 
 _XionIA Faraday — La red que no le pide permiso a nadie._
 
-_Última actualización: 30 de Julio de 2026_
+_Última actualización: 4 de Agosto de 2026
