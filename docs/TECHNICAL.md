@@ -86,7 +86,7 @@ Sin handshake válido, el faro descarta **todo** mensaje del nodo en silencio.
 
 XionChat es el cliente Android de referencia para la Fase 1. Repo separado:
 `github.com/mamanga1/xionia-xtp`. Binding Go→Flutter (FFI/cgo) con
-notificaciones en background vía `flutter_background_service`, watchdog
+background via `XioniaService.kt` nativo (proceso :mesh), single-isolate Flutter, watchdog
 de reconexión (20s), y ANNOUNCE con retry (3s).
 
 ---
@@ -322,11 +322,10 @@ No hay `../`, no hay symlinks, no hay escape.
 
 | Fase | Estado | Contenido |
 |------|--------|-----------|
-| **Fase 1** | 🔒 Congelada (v1.0) | Crypto, ACL, faro dual, shell, jaula, grupos, XionChat |
-| **Fase 2** | ❌ Pendiente de diseño | U2P, hosting, navegador, IA colaborativa *(requiere RFCs cerrados)* |
-| **Fase 3** | ❌ Visión | XPT (Jami++), audio E2E, Xion Console, Swarm |
+| **Fase 1** | 🔒 Congelada (v1.0.1) | Crypto, ACL, faro dual, shell, jaula, grupos, XionChat |
+| **Fase 2** | ❌ Pendiente de diseño → 🔄 En desarrollo en xionia-kernel (próximamente público). 
+Sprint 1+2 completados: TransportManager, Noise IK, DirectTransport, RelayTransport, Faro signaling puro — 95 tests.
 
 ---
 
-Última actualización: 30 de Julio de 2026_
-
+Última actualización: 4 de Agosto de 2026
