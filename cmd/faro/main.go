@@ -1,3 +1,13 @@
+// Copyright (C) 2026 Fernando Martin Lopez. All Rights Reserved.
+// SPDX-License-Identifier: AGPL-3.0-only WITH Commons-Clause-1.0
+//
+// This file is part of Web5-Mesh — sovereign network kernel prototype (Fase 1).
+// Use of this source code is governed by the AGPLv3 + Commons Clause
+// license that can be found in the LICENSE file at the root of this repo.
+//
+// Commercial use, SaaS deployment, or resale without a commercial license
+// agreement is strictly prohibited. Contact the author for licensing.
+
 package main
 
 import (
