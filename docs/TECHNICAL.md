@@ -323,8 +323,7 @@ No hay `../`, no hay symlinks, no hay escape.
 | Fase | Estado | Contenido |
 |------|--------|-----------|
 | **Fase 1** | 🔒 Congelada (v1.0.1) | Crypto, ACL, faro dual, shell, jaula, grupos, XionChat |
-| **Fase 2** | ❌ Pendiente de diseño → 🔄 En desarrollo en xionia-kernel (próximamente público). 
-Sprint 1+2 completados: TransportManager, Noise IK, DirectTransport, RelayTransport, Faro signaling puro — 95 tests.
+| **Fase 2** | ❌ Pendiente de diseño → 🔄 En desarrollo en xionia-kernel (próximamente público) | Sprint 1+2 completados: TransportManager, Noise IK, DirectTransport, RelayTransport, Faro signaling puro — 95 tests.
 
 ---
 
