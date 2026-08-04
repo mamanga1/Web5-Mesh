@@ -18,17 +18,17 @@ Corre en servidores Xeon, Raspberry Pi, TV boxes y celulares Android.
 │  └─────┬─────┘  └─────┬─────┘  └───────┬───────┘    │
 │        │              │                │            │
 │  ┌─────┴──────────────┴────────────────┴───────┐    │
-│  │           src/crypto/ (core)                 │   │
-│  │  identity · cipher · acl · alias · groups    │   │
-│  │  gate · noise (no conectado — Fase 2)        │   │
+│  │           src/crypto/ (core)                │    │
+│  │  identity · cipher · acl · alias · groups   │    │
+│  │  gate · noise (no conectado — Fase 2)       │    │
 │  └─────────────────────┬───────────────────────┘    │
 │                        │                            │
 │  ┌─────────────────────┴───────────────────────┐    │
-│  │           Transporte                         │   │
-│  │  UDP 54321 (default) + WSS 443 (fallback)    │   │
-│  │  U2P/XTP: Túneles propios (Noise+Curve25519) │   │
-│  │           para perforar CGNAT                │   │
-│  │           (Fase 2 — no implementado)         │   │
+│  │           Transporte                        │    │
+│  │  UDP 54321 (default) + WSS 443 (fallback)   │    │
+│  │  U2P/XTP: Túneles propios (Noise+Curve25519)│    │
+│  │           para perforar CGNAT               │    │
+│  │           (Fase 2 — no implementado)        │    │
 │  └─────────────────────┬───────────────────────┘    │
 └────────────────────────┼────────────────────────────┘
                          │
