@@ -10,26 +10,26 @@ Corre en servidores Xeon, Raspberry Pi, TV boxes y celulares Android.
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                    NODO XIONIA                       │
+│                    NODO XIONIA                      │
 │                                                     │
-│  ┌───────────┐  ┌───────────┐  ┌───────────────┐   │
-│  │  Shell    │  │  Jaula    │  │  IA Local     │   │
-│  │  (prompt) │  │  Faraday  │  │  (llama.cpp)  │   │
-│  └─────┬─────┘  └─────┬─────┘  └───────┬───────┘   │
+│  ┌───────────┐  ┌───────────┐  ┌───────────────┐    │
+│  │  Shell    │  │  Jaula    │  │  IA Local     │    │
+│  │  (prompt) │  │  Faraday  │  │  (llama.cpp)  │    │
+│  └─────┬─────┘  └─────┬─────┘  └───────┬───────┘    │
 │        │              │                │            │
-│  ┌─────┴──────────────┴────────────────┴───────┐   │
+│  ┌─────┴──────────────┴────────────────┴───────┐    │
 │  │           src/crypto/ (core)                 │   │
 │  │  identity · cipher · acl · alias · groups    │   │
 │  │  gate · noise (no conectado — Fase 2)        │   │
-│  └─────────────────────┬───────────────────────┘   │
+│  └─────────────────────┬───────────────────────┘    │
 │                        │                            │
-│  ┌─────────────────────┴───────────────────────┐   │
+│  ┌─────────────────────┴───────────────────────┐    │
 │  │           Transporte                         │   │
 │  │  UDP 54321 (default) + WSS 443 (fallback)    │   │
 │  │  U2P/XTP: Túneles propios (Noise+Curve25519) │   │
 │  │           para perforar CGNAT                │   │
 │  │           (Fase 2 — no implementado)         │   │
-│  └─────────────────────┬───────────────────────┘   │
+│  └─────────────────────┬───────────────────────┘    │
 └────────────────────────┼────────────────────────────┘
                          │
               ┌──────────┴──────────┐
@@ -207,16 +207,16 @@ documentos/  descargas/  proyectos/
 ┌─────────────────────────────────────────┐
 │           NODO CON IA LOCAL             │
 │                                         │
-│  ┌─────────────┐  ┌─────────────────┐  │
-│  │  Shell Xion │  │  llama.cpp      │  │
-│  │  (comando   │──│  (GGUF local)   │  │
-│  │   "ia")     │  │  Puerto 8080    │  │
-│  └─────────────┘  └─────────────────┘  │
+│  ┌─────────────┐  ┌─────────────────┐   │
+│  │  Shell Xion │  │  llama.cpp      │   │
+│  │  (comando   │──│  (GGUF local)   │   │
+│  │   "ia")     │  │  Puerto 8080    │   │
+│  └─────────────┘  └─────────────────┘   │
 │                                         │
 │  Modelos:                               │
-│  - llama-3.2-3b-instruct.gguf (2GB)    │
-│  - phi-3-mini-4k-instruct.gguf (2.3GB) │
-│  - qwen2.5-1.5b-instruct.gguf (1GB)   │
+│  - llama-3.2-3b-instruct.gguf (2GB)     │
+│  - phi-3-mini-4k-instruct.gguf (2.3GB)  │
+│  - qwen2.5-1.5b-instruct.gguf (1GB)     │
 └─────────────────────────────────────────┘
 ```
 
