@@ -67,7 +67,7 @@ func NewTransportManager(
 		},
 		OnError: func(peerDID string, err error) {
 			if cb.OnError != nil {
-				cb.OnError("relay:"+peerDID[:15], err)
+				cb.OnError("relay:"+safeDID(peerDID, 15), err)
 			}
 		},
 	}
@@ -114,7 +114,7 @@ func (tm *TransportManager) Send(peerDID string, command string) (transport stri
 	if hasDirect && direct.IsActive() {
 		if err := direct.Send([]byte(command)); err != nil {
 			if tm.cb.OnError != nil {
-				tm.cb.OnError("direct:"+peerDID[:15], fmt.Errorf("envío directo falló, cayendo a relay: %w", err))
+				tm.cb.OnError("direct:"+safeDID(peerDID, 15), fmt.Errorf("envío directo falló, cayendo a relay: %w", err))
 			}
 		} else {
 			return "direct", nil
@@ -126,7 +126,7 @@ func (tm *TransportManager) Send(peerDID string, command string) (transport stri
 		if hasPeer {
 			if len(peer.PubKeyX) != 32 {
 				if tm.cb.OnError != nil {
-					tm.cb.OnError("xtp:"+peerDID[:15], fmt.Errorf("peer sin PubKeyX válida (len=%d)", len(peer.PubKeyX)))
+					tm.cb.OnError("xtp:"+safeDID(peerDID, 15), fmt.Errorf("peer sin PubKeyX válida (len=%d)", len(peer.PubKeyX)))
 				}
 			} else {
 				peerPubX := new([32]byte)
@@ -155,23 +155,13 @@ func (tm *TransportManager) Send(peerDID string, command string) (transport stri
 	return "relay", nil
 }
 
-func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte) {
-	tm.mu.Lock()
-	if tm.closed {
-		tm.mu.Unlock()
-		return
-	}
-	if _, exists := tm.direct[peerDID]; exists {
-		tm.mu.Unlock()
-		return
-	}
-
+func (tm *TransportManager) buildDirectTransport(peerDID string) *DirectTransport {
 	dtCb := DirectCallbacks{
 		OnPunchComplete: func(peerDID string, peerAddr *net.UDPAddr) {
-			Debugf("[XTP-MGR] 👊 Hole punching exitoso con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 👊 Hole punching exitoso con %s\n", safeDID(peerDID, 20)+"...")
 		},
 		OnSessionActive: func(peerDID string) {
-			Debugf("[XTP-MGR] 🔐 Sesión directa activa con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 🔐 Sesión directa activa con %s\n", safeDID(peerDID, 20)+"...")
 			if tm.cb.OnDirectSessionActive != nil {
 				tm.cb.OnDirectSessionActive(peerDID)
 			}
@@ -183,7 +173,7 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 			}
 		},
 		OnSessionLost: func(peerDID string) {
-			Debugf("[XTP-MGR] 💀 Sesión directa perdida con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 💀 Sesión directa perdida con %s\n", safeDID(peerDID, 20)+"...")
 			if tm.cb.OnDirectSessionLost != nil {
 				tm.cb.OnDirectSessionLost(peerDID)
 			}
@@ -192,7 +182,7 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 			tm.mu.Unlock()
 		},
 		OnFallbackToRelay: func(peerDID string) {
-			Debugf("[XTP-MGR] 🔄 Fallback a relay con %s\n", peerDID[:20]+"...")
+			Debugf("[XTP-MGR] 🔄 Fallback a relay con %s\n", safeDID(peerDID, 20)+"...")
 			if tm.cb.OnFallbackToRelay != nil {
 				tm.cb.OnFallbackToRelay(peerDID)
 			}
@@ -223,11 +213,26 @@ func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte)
 		dt.SetExpectedPeerPubX(pubX)
 	}
 
+	return dt
+}
+
+func (tm *TransportManager) tryDirectSession(peerDID string, peerPubX *[32]byte) {
+	tm.mu.Lock()
+	if tm.closed {
+		tm.mu.Unlock()
+		return
+	}
+	if _, exists := tm.direct[peerDID]; exists {
+		tm.mu.Unlock()
+		return
+	}
+
+	dt := tm.buildDirectTransport(peerDID)
 	tm.direct[peerDID] = dt
 	tm.mu.Unlock()
 
 	if err := dt.OpenSession(peerDID, peerPubX); err != nil {
-		Debugf("[XTP-MGR] ❌ Sesión directa falló con %s: %v\n", peerDID[:20]+"...", err)
+		Debugf("[XTP-MGR] ❌ Sesión directa falló con %s: %v\n", safeDID(peerDID, 20)+"...", err)
 		tm.mu.Lock()
 		delete(tm.direct, peerDID)
 		tm.mu.Unlock()
@@ -292,71 +297,21 @@ func (tm *TransportManager) handleFaroSignal(raw string) bool {
 		_, inACL := tm.aclByDID[senderDID]
 		tm.mu.RUnlock()
 		if !inACL {
-			Debugf("[XTP-MGR] ⚠️ SESSION_INCOMING rechazado: %s no está en ACL\n", senderDID[:20]+"...")
+			Debugf("[XTP-MGR] ⚠️ SESSION_INCOMING rechazado: %s no está en ACL\n", safeDID(senderDID, 20)+"...")
 			return true
 		}
 
 		tm.mu.Lock()
 		dt, exists := tm.direct[senderDID]
 		if !exists {
-			dtCb := DirectCallbacks{
-				OnSessionActive: func(peerDID string) {
-					if tm.cb.OnDirectSessionActive != nil {
-						tm.cb.OnDirectSessionActive(peerDID)
-					}
-				},
-				OnMessage: func(peerDID string, plaintext []byte) {
-					displayName := crypto.ResolveDID(peerDID)
-					if tm.cb.OnMessage != nil {
-						tm.cb.OnMessage(peerDID, displayName, string(plaintext))
-					}
-				},
-				OnSessionLost: func(peerDID string) {
-					if tm.cb.OnDirectSessionLost != nil {
-						tm.cb.OnDirectSessionLost(peerDID)
-					}
-					tm.mu.Lock()
-					delete(tm.direct, peerDID)
-					tm.mu.Unlock()
-				},
-				OnFallbackToRelay: func(peerDID string) {
-					if tm.cb.OnFallbackToRelay != nil {
-						tm.cb.OnFallbackToRelay(peerDID)
-					}
-					tm.mu.Lock()
-					delete(tm.direct, peerDID)
-					tm.mu.Unlock()
-				},
-				OnClose: func(peerDID string) {
-					tm.mu.Lock()
-					delete(tm.direct, peerDID)
-					tm.mu.Unlock()
-				},
-			}
-
-			// FIX B: FSM por-sesión, sembrada en Registered
-			sessionFSM := NewFSM()
-			sessionFSM.Send(EvConnectFaro, nil)
-			sessionFSM.Send(EvFaroConnected, nil)
-			sessionFSM.Send(EvAnnounceSent, nil)
-
-			dt = NewDirectTransport(tm.identity.DID, sessionFSM, tm.faro, dtCb)
-			dt.SetIdentity(tm.identity)
-
-			// FIX A hardening: sembrar expectedPeerPubX
-			if peer, ok := tm.aclByDID[senderDID]; ok && len(peer.PubKeyX) == 32 {
-				pubX := new([32]byte)
-				copy(pubX[:], peer.PubKeyX[:32])
-				dt.SetExpectedPeerPubX(pubX)
-			}
-
+			dt = tm.buildDirectTransport(senderDID)
 			tm.direct[senderDID] = dt
 		}
 		tm.mu.Unlock()
 
 		if err := dt.HandleIncomingSession(raw); err != nil {
 			if tm.cb.OnError != nil {
-				tm.cb.OnError("session_incoming:"+senderDID[:15], err)
+				tm.cb.OnError("session_incoming:"+safeDID(senderDID, 15), err)
 			}
 			tm.mu.Lock()
 			delete(tm.direct, senderDID)
@@ -461,6 +416,13 @@ func (tm *TransportManager) getPeerKeys(peerDID string) (PeerKeys, bool) {
 	defer tm.mu.RUnlock()
 	pk, exists := tm.aclByDID[peerDID]
 	return pk, exists
+}
+
+func safeDID(did string, n int) string {
+	if len(did) <= n {
+		return did
+	}
+	return did[:n]
 }
 
 func splitFields(s string) []string {

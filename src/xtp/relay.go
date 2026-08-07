@@ -37,14 +37,12 @@ type RelayCallbacks struct {
 type RelayTransport struct {
 	mu sync.RWMutex
 
-	identity *crypto.Identity
-	faro     FaroSender
-	aclIndex map[[4]byte]PeerKeys
-	aclByDID map[string]PeerKeys
-	cb       RelayCallbacks
-
-	closed bool
-
+	identity     *crypto.Identity
+	faro         FaroSender
+	aclIndex     map[[4]byte]PeerKeys
+	aclByDID     map[string]PeerKeys
+	cb           RelayCallbacks
+	closed       bool
 	incomingChan chan IncomingMessage
 }
 
@@ -84,6 +82,10 @@ func (rt *RelayTransport) Send(peerDID string, command string) error {
 			return fmt.Errorf("peer %s no está en el ACL", peerDID[:20]+"...")
 		}
 		return fmt.Errorf("peer %s no está en el ACL", peerDID)
+	}
+
+	if len(peer.SharedKey) != 32 {
+		return fmt.Errorf("cifrando payload: chacha20poly1305: bad key length")
 	}
 
 	inner := InnerPayload{
@@ -230,8 +232,6 @@ func (rt *RelayTransport) Close() {
 	rt.closed = true
 }
 
-// FIX 15: una sola llamada a rand.Read en vez de una por byte.
-// Antes hacía N syscalls (uno por cada byte de padding).
 func addRelayPadding(payload string) string {
 	randSize := make([]byte, 1)
 	rand.Read(randSize)
