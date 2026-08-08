@@ -35,3 +35,5 @@ audit_dump.txt
 release.pub
 todos_los_archivos.txt
 todos_los_archivos.txt
+*.bak*
+*.diff
