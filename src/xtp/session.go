@@ -76,7 +76,15 @@ func NewSession(isInitiator bool, myIdentity *crypto.Identity, peerDID string, p
 	pubX := new([32]byte)
 	copy(pubX[:], myIdentity.PubKeyX[:])
 
-	noise, err := crypto.NewHandshakeIK(isInitiator, privX, pubX, peerPubX, nil)
+	var prologue []byte
+	if peerDID != "" {
+		if isInitiator {
+			prologue = crypto.BuildNoisePrologue(myIdentity.DID, peerDID)
+		} else {
+			prologue = crypto.BuildNoisePrologue(peerDID, myIdentity.DID)
+		}
+	}
+	noise, err := crypto.NewHandshakeIK(isInitiator, privX, pubX, peerPubX, prologue)
 	if err != nil {
 		return nil, fmt.Errorf("creando Noise IK: %w", err)
 	}
@@ -457,4 +465,3 @@ func dispatchCallback(cbName string, cb func(string), peerDID string) {
 		cb(peerDID)
 	}()
 }
-
