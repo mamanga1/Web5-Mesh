@@ -343,7 +343,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			return
 		}
 		gateDIDsMu.Lock()
-		gateDIDs[remoteAddr.String()] = did
+		gateDIDs[remoteAddr.IP.String()] = did
 		gateDIDsMu.Unlock()
 
 		ack := fmt.Sprintf(`{"ack":"ok","did":"%s","ts":%d,"nodes":%d}`,
@@ -353,9 +353,9 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 		return
 	}
 
-	if !faroGate.IsAllowed(remoteAddr.String()) {
+	if !faroGate.IsAllowed(remoteAddr.IP.String()) {
 		gateDIDsMu.RLock()
-		knownDID := gateDIDs[remoteAddr.String()]
+		knownDID := gateDIDs[remoteAddr.IP.String()]
 		gateDIDsMu.RUnlock()
 		if knownDID != "" {
 			fmt.Printf("[FARO-UDP] ⚠️ Gate rechazó %s (DID: %s) — IP cambió\n",
@@ -391,7 +391,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 
 			// FIX 5: verificar que el DID del ANNOUNCE coincide
 			// con el DID autenticado via Gate para esta IP
-			if !verifyGateDID(remoteAddr.String(), did) {
+			if !verifyGateDID(remoteAddr.IP.String(), did) {
 				fmt.Printf("[FARO-UDP] ⚠️ ANNOUNCE rechazado: DID %s no coincide con Gate para %s\n",
 					truncDID(did), maskAddr(remoteAddr))
 				return
@@ -415,7 +415,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			senderDID := stripPadding(parts[2])
 
 			// FIX 6: verificar senderDID contra Gate
-			if !verifyGateDID(remoteAddr.String(), senderDID) {
+			if !verifyGateDID(remoteAddr.IP.String(), senderDID) {
 				fmt.Printf("[FARO-UDP] ⚠️ OPEN_SESSION rechazado: senderDID %s no coincide con Gate\n",
 					truncDID(senderDID))
 				return
@@ -468,7 +468,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			senderDID := stripPadding(parts[2])
 
 			// FIX Kimi 6: verificar senderDID contra Gate
-			if !verifyGateDID(remoteAddr.String(), senderDID) {
+			if !verifyGateDID(remoteAddr.IP.String(), senderDID) {
 				fmt.Printf("[FARO-UDP] ⚠️ PUNCH rechazado: senderDID %s no coincide con Gate\n",
 					truncDID(senderDID))
 				return
@@ -525,7 +525,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			payload := parts[3]
 
 			// FIX 6: verificar senderDID contra Gate
-			if !verifyGateDID(remoteAddr.String(), senderDID) {
+			if !verifyGateDID(remoteAddr.IP.String(), senderDID) {
 				fmt.Printf("[FARO-UDP] ⚠️ RELAY rechazado: senderDID %s no coincide con Gate\n",
 					truncDID(senderDID))
 				return
@@ -680,7 +680,11 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	gateDIDsMu.Lock()
-	gateDIDs[r.RemoteAddr] = gateDID
+	if wsHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		gateDIDs[wsHost] = gateDID
+	} else {
+		gateDIDs[r.RemoteAddr] = gateDID
+	}
 	gateDIDsMu.Unlock()
 	fmt.Printf("[FARO-WS] 🔑 Gate: %s autorizado desde %s\n", truncDID(gateDID), maskRemoteAddr(r.RemoteAddr))
 
@@ -695,6 +699,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Rate limiting WS: misma política que UDP
 	host, _, _ := net.SplitHostPort(r.RemoteAddr)
+	wsIP := host // usar solo IP para Gate (CGNAT safe)
 	if !limiter.Allow(host) {
 		conn.Close()
 		return
@@ -742,7 +747,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				}
 
 				// FIX Kimi 5: verificar DID contra Gate
-				if !verifyGateDID(r.RemoteAddr, did) {
+				if !verifyGateDID(wsIP, did) {
 					fmt.Printf("[FARO-WS] ⚠️ ANNOUNCE rechazado: DID %s no coincide con Gate\n",
 						truncDID(did))
 					continue
@@ -766,7 +771,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				senderDID := stripPadding(parts[2])
 
 				// FIX Kimi 6: verificar senderDID contra Gate
-				if !verifyGateDID(r.RemoteAddr, senderDID) {
+				if !verifyGateDID(wsIP, senderDID) {
 					conn.WriteMessage(websocket.TextMessage,
 						[]byte(fmt.Sprintf("SESSION_ERROR %s: sender not authenticated", targetDID)))
 					continue
@@ -829,7 +834,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				targetDID := stripPadding(parts[1])
 				senderDID := stripPadding(parts[2])
 
-				if !verifyGateDID(r.RemoteAddr, senderDID) {
+				if !verifyGateDID(wsIP, senderDID) {
 					continue
 				}
 
@@ -847,7 +852,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				targetDID := stripPadding(parts[1])
 				senderDID := stripPadding(parts[2])
 
-				if !verifyGateDID(r.RemoteAddr, senderDID) {
+				if !verifyGateDID(wsIP, senderDID) {
 					continue
 				}
 
@@ -864,7 +869,7 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				payload := parts[3]
 
 				// FIX Kimi 6: verificar senderDID contra Gate
-				if !verifyGateDID(r.RemoteAddr, senderDID) {
+				if !verifyGateDID(wsIP, senderDID) {
 					conn.WriteMessage(websocket.TextMessage,
 						[]byte(fmt.Sprintf("ERROR %s: sender not authenticated", targetDID)))
 					continue
