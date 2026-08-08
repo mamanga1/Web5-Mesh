@@ -144,7 +144,7 @@ func getPrimaryUDPConn() *net.UDPConn {
 var faroGate = crypto.NewGate(500, 2*time.Hour)
 
 var (
-	gateDIDs   = make(map[string]string)
+	gateDIDs   = make(map[string]map[string]bool)
 	gateDIDsMu sync.RWMutex
 )
 
@@ -152,9 +152,9 @@ var (
 // autenticado via Gate para esa dirección remota
 func verifyGateDID(remoteAddr string, claimedDID string) bool {
 	gateDIDsMu.RLock()
-	gateDID := gateDIDs[remoteAddr]
+	dids := gateDIDs[remoteAddr]
 	gateDIDsMu.RUnlock()
-	return gateDID != "" && gateDID == claimedDID
+	return dids != nil && dids[claimedDID]
 }
 
 // ============================================================================
@@ -343,7 +343,10 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			return
 		}
 		gateDIDsMu.Lock()
-		gateDIDs[remoteAddr.IP.String()] = did
+		if gateDIDs[remoteAddr.IP.String()] == nil {
+			gateDIDs[remoteAddr.IP.String()] = make(map[string]bool)
+		}
+		gateDIDs[remoteAddr.IP.String()][did] = true
 		gateDIDsMu.Unlock()
 
 		ack := fmt.Sprintf(`{"ack":"ok","did":"%s","ts":%d,"nodes":%d}`,
@@ -355,11 +358,11 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 
 	if !faroGate.IsAllowed(remoteAddr.IP.String()) {
 		gateDIDsMu.RLock()
-		knownDID := gateDIDs[remoteAddr.IP.String()]
+		knownDIDs := gateDIDs[remoteAddr.IP.String()]
 		gateDIDsMu.RUnlock()
-		if knownDID != "" {
+		if len(knownDIDs) > 0 {
 			fmt.Printf("[FARO-UDP] ⚠️ Gate rechazó %s (DID: %s) — IP cambió\n",
-				maskAddr(remoteAddr), truncDID(knownDID))
+				maskAddr(remoteAddr), fmt.Sprintf("%d DIDs", len(knownDIDs)))
 		}
 		return
 	}
@@ -681,9 +684,15 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	gateDIDsMu.Lock()
 	if wsHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		gateDIDs[wsHost] = gateDID
+		if gateDIDs[wsHost] == nil {
+			gateDIDs[wsHost] = make(map[string]bool)
+		}
+		gateDIDs[wsHost][gateDID] = true
 	} else {
-		gateDIDs[r.RemoteAddr] = gateDID
+		if gateDIDs[r.RemoteAddr] == nil {
+			gateDIDs[r.RemoteAddr] = make(map[string]bool)
+		}
+		gateDIDs[r.RemoteAddr][gateDID] = true
 	}
 	gateDIDsMu.Unlock()
 	fmt.Printf("[FARO-WS] 🔑 Gate: %s autorizado desde %s\n", truncDID(gateDID), maskRemoteAddr(r.RemoteAddr))
