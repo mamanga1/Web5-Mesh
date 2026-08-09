@@ -338,7 +338,7 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 	}
 
 	if isHandshake(data) {
-		did, err := faroGate.VerifyHandshake(data, remoteAddr.String())
+		did, err := faroGate.VerifyHandshake(data, remoteAddr.IP.String())
 		if err != nil {
 			return
 		}
@@ -676,7 +676,8 @@ func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hsJSON, _ := json.Marshal(hs)
-	gateDID, err := faroGate.VerifyHandshake(hsJSON, r.RemoteAddr)
+	wsHost2, _, _ := net.SplitHostPort(r.RemoteAddr)
+	gateDID, err := faroGate.VerifyHandshake(hsJSON, wsHost2)
 	if err != nil {
 		http.Error(w, "", 403)
 		return
