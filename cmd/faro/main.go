@@ -33,6 +33,54 @@ import (
 
 const numShards = 16
 
+// Faros hermanos para federación pasiva.
+// Cuando un DID no se encuentra localmente, se consulta a estos faros.
+var federatedFaros []string
+var federatedFarosMu sync.RWMutex
+
+// federationLookup consulta a los faros hermanos si tienen un DID.
+// Devuelve el endpoint del DID si lo encuentra, o "" si no.
+func federationLookup(targetDID string) string {
+	federatedFarosMu.RLock()
+	faros := make([]string, len(federatedFaros))
+	copy(faros, federatedFaros)
+	federatedFarosMu.RUnlock()
+
+	for _, faro := range faros {
+		conn, err := net.DialTimeout("udp4", faro, 2*time.Second)
+		if err != nil {
+			continue
+		}
+		defer conn.Close()
+		conn.SetDeadline(time.Now().Add(2 * time.Second))
+		query := fmt.Sprintf("FED_LOOKUP %s", targetDID)
+		conn.Write([]byte(query))
+		buf := make([]byte, 512)
+		n, err := conn.Read(buf)
+		if err != nil {
+			continue
+		}
+		resp := string(buf[:n])
+		if strings.HasPrefix(resp, "FED_FOUND ") {
+			parts := strings.Fields(resp)
+			if len(parts) >= 3 {
+				return parts[2] // endpoint
+			}
+		}
+	}
+	return ""
+}
+
+// federationRelay reenvía un payload relay a un faro hermano.
+func federationRelay(targetFaro, payload string) {
+	conn, err := net.DialTimeout("udp4", targetFaro, 2*time.Second)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	conn.Write([]byte(payload))
+}
+
 type registryEntry struct {
 	addr     *net.UDPAddr
 	lastSeen time.Time
@@ -427,7 +475,14 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 			senderEntry, senderExists := registryGet(senderDID)
 			targetEntry, targetExists := registryGet(targetDID)
 
-			if !senderExists || !targetExists {
+			if !senderExists {
+				errMsg := fmt.Sprintf("SESSION_ERROR %s: sender not registered", senderDID)
+				conn.WriteToUDP([]byte(errMsg), remoteAddr)
+				return
+			}
+			if !targetExists {
+				// Federación pasiva: buscar en faros hermanos
+				_ = federationLookup(targetDID)
 				errMsg := fmt.Sprintf("SESSION_ERROR %s: peer not registered", targetDID)
 				conn.WriteToUDP([]byte(errMsg), remoteAddr)
 				return
@@ -597,6 +652,19 @@ func handleUDPMessage(conn *net.UDPConn, data []byte, remoteAddr *net.UDPAddr) {
 
 	case "VERIFY_HASH":
 		handleVerifyHash(conn, remoteAddr)
+
+	case "FED_LOOKUP":
+		// Consulta de federación — otro faro pregunta si tenemos un DID
+		if len(parts) >= 2 {
+			queryDID := parts[1]
+			if entry, ok := registryGet(queryDID); ok {
+				resp := fmt.Sprintf("FED_FOUND %s %s", queryDID, entry.endpoint)
+				conn.WriteToUDP([]byte(resp), remoteAddr)
+			} else {
+				resp := fmt.Sprintf("FED_NOT_FOUND %s", queryDID)
+				conn.WriteToUDP([]byte(resp), remoteAddr)
+			}
+		}
 
 	case "STATS":
 		resp := fmt.Sprintf(
@@ -1141,6 +1209,18 @@ func main() {
 	fmt.Println("   Registry: sharded (16 shards) + TTL 90s")
 	fmt.Println("   Rate limiting: 20 msg/5s por IP")
 	fmt.Printf("   Versión: %s (%s)\n", buildVersion, buildCommit)
+
+	// Federación via variable de entorno FED_PEERS
+	// Ejemplo: FED_PEERS=150.136.55.87:54321,157.151.143.89:54321
+	if fedEnv := os.Getenv("FED_PEERS"); fedEnv != "" {
+		for _, f := range strings.Split(fedEnv, ",") {
+			f = strings.TrimSpace(f)
+			if f != "" {
+				federatedFaros = append(federatedFaros, f)
+			}
+		}
+		fmt.Printf("   Federación: %v\n", federatedFaros)
+	}
 
 	go startCleaner()
 	go startUDPServer("54321")
