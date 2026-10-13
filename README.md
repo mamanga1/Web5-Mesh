@@ -37,7 +37,8 @@ cd Web5-Mesh
 
 ```bash
 # Terminal 1 - Levantar Faro (UDP + WebSocket)
-./faro ver mas en FAROS.md
+./faro
+ver mas en: https://github.com/mamanga1/Web5-Mesh/blob/main/docs/FAROS.md
 
 # Terminal 2 - Conectar nodo
 ./mesh shell
