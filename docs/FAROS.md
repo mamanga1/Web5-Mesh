@@ -71,7 +71,7 @@ La soberanía es eso: cualquiera puede ser infraestructura.
 
 ---
 
-## Faros Públicos (lista comunitaria)
+## Faros Semilla Públicos (lista comunitaria)
 
 Esta tabla es solo una **referencia de faros conocidos**, no un gate de
 entrada. Si levantás un faro y querés que aparezca acá, mandá un PR con
@@ -79,8 +79,8 @@ los datos. Si no, no importa — tu faro funciona igual.
 
 | Nombre | Dirección | UDP | WSS | Operador | Región |
 |--------|-----------|-----|-----|----------|--------|
-| **Faro Principal** | `190.220.45.26:54321` | ✅ | ✅ (443) | mamanga1 | NEA, Argentina |
-| **Faro Oracle** | `150.136.55.87:54321` | ✅ | ✅ (443) | mamanga1 | Oracle Cloud |
+| **Faro Principal** | `190.220.45.26:54321` | ✅ | ✅ (443) | mamanga1 | NEA, Argentina | 
+| **Faro Oracle** | `157.151.143.89:54321` | ✅ | ✅ (443) | mamanga1 | Oracle Cloud |
 
 ---
 
