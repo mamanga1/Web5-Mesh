@@ -1,7 +1,7 @@
 # DerinKuyu-SSH — Administración remota por DID (comando `remote`)
 
 **Referencia técnica completa** · `xionia-kernel` v9.2 · noviembre de 2026
-**Línea de producto:** DerinKuyu-SSH (gratuita) · **Diseño de referencia:** MEMO-INTERNO-TUNEL-SSH-POR-DID, directivas D1–D10 · **Evidencia:** `captura-test.txt` (test real entre dos nodos, 5–6/11/2026)
+**Línea de producto:** DerinKuyu-SSH (gratuita) · **Diseño de referencia:** MEMO-INTERNO-TUNEL-SSH-POR-DID, directivas D1–D10 · **Evidencia:** `captura-test.txt` (test real entre dos nodos, 5–6/11/2026) · **Multitarea:** Ctrl+T (§8.1)
 
 ---
 
@@ -110,6 +110,31 @@ Los frames viajan por el mismo gancho de mensajería del kernel (demux por prefi
 **Del lado operador:** la consola puentea el túnel a `127.0.0.1` en un **puerto local efímero** y el cliente `ssh` local se conecta ahí — el operador tiene la experiencia OpenSSH completa (shell, pty, sftp) dentro de su consola.
 
 **Del lado destino:** si ACL y catálogo autorizan, el nodo crea un **directorio de sesión efímero** bajo `/run/xionia` (un `authorized_keys` que nace y muere con la sesión), lanza `sshd -i` (una conexión por stdin/stdout, sin escuchar puerto alguno) y puentea el túnel con ese proceso.
+
+### 8.1 Multitarea del operador: Ctrl+T alterna ssh ↔ chat
+
+*(UX-1 de la hoja de ruta, §15 — resuelta.)*
+
+Mientras vive el ssh del túnel, el **mismo teclado y la misma pantalla** alternan entre el proceso remoto y el chat del kernel. Sin TUI, sin segunda terminal, sin cerrar nada: un multiplexor de terminal cruda que **nace y muere con el ssh del túnel** — vive en `cmd/derinkuyu/multi.go`.
+
+| Tecla | Vista SSH | Vista CHAT |
+|---|---|---|
+| **Ctrl+T** | El teclado pasa al chat | El teclado vuelve al ssh |
+| **Enter** | Viaja al proceso | Manda la línea por el kernel (presupuesto de 10 s: el teclado nunca se congela) |
+| **BS / ^U / ^C** | Viajan al proceso (`-tt`: `^C` = SIGINT remoto) | Borra un rune UTF-8 completo / limpia la línea / la descarta |
+| **Flechas** | Viajan al proceso (historial del shell remoto) | Se tragan: no ensucian la línea |
+
+- **Ctrl+T nunca llega al remoto:** se captura localmente, antes de que la disciplina de línea del TTY meta mano; el resto de las teclas viaja limpio a donde tiene que ir.
+- **Re-eco a prueba de output:** si llega un mensaje mientras vivís la sesión — aunque el ssh esté escupiendo output — se borra la línea en curso, se imprime el mensaje entero con su hora y la línea se re-ecoa: **nada se pierde.**
+- **El chat apunta a donde apuntaba:** el editor le habla al chat activo (`to <alias>`) si lo había; si no, al nodo del túnel. Se puede administrar por SSH un nodo y chatear con otro a la vez.
+- **Sin lectores zombis:** exactamente UN lector de stdin por instante (poll de 50 ms): cuando el ssh muere, el lector suelta el teclado antes de que despierte el readline de la consola.
+- **Degradación elegante:** sin TTY local (o sin modo raw posible) cae al ssh clásico de siempre — nadie prometió multitarea sin terminal.
+
+**La doctrina del §2 sigue entera:** una consola, un kernel, una identidad, un transporte. `pkg/` quedó intacto: todo vive en `cmd/derinkuyu/multi.go`, con dos anclas — el ruteo de mensajes en `main.go` (si hay sesión viva, lo que entra pasa por el multiplexor, con re-eco) y la invocación en `remote.go`.
+
+**Calidad:** `go vet` limpio · 9 tests propios en `multi_test.go` — tipeo, backspace de rune completo, runas UTF-8 partidas entre lecturas, ^U, ^C, flechas, alternancia Ctrl+T, feed al ssh y multiplexor muerto que no come teclas — todos en verde con `-race`.
+
+**Evidencia de campo (noviembre de 2026):** sesión real de administración con un `apt` bajando **121 MB en 7 s** del lado del host remoto y el output del ssh desbordando la pantalla — los mensajes del chat fueron llegando y re-ecoándose en el medio de todo, y al cerrar, el recibo firmado como siempre.
 
 ---
 
@@ -244,7 +269,7 @@ Límite declarado: esto acredita la integridad criptográfica del registro. No c
 
 | Límite | Detalle | Camino |
 |---|---|---|
-| Sesión única por consola | Mientras operás el SSH, el REPL queda en la sesión | UX-1 (multitarea) en desarrollo |
+| Sesión única por consola | Un ssh de túnel por consola a la vez — pero ya no atrapa: Ctrl+T alterna al chat sin cerrar el túnel (§8.1) | UX-2 multi-consola simultánea |
 | ROOT_ADMIN todo-o-nada | Habilita la capa host completa, DID por DID | Granularidad jaula/host/bastión — siguiente escalón del catálogo |
 | Revocación no corta túneles abiertos | Los túneles ya abiertos siguen hasta cerrarse (propiedad documentada) | Corte inmediato, en evaluación |
 | Doble NAT restrictivo | El test cubrió camino directo; doble NAT de ambos lados pendiente | Gate de campo en cola |
@@ -284,7 +309,7 @@ Transcripción completa de ambas consolas: `captura-test.txt`.
 
 **No es una VPN.** El túnel `ip:puerto` arbitrario está prohibido por diseño (directiva D7): la capa 3 (otros hosts de la LAN del nodo) se alcanzará únicamente por alias del catálogo sellado — la IP de destino nunca sale del nodo. No hay cliente SSH propio ni fork de `sshd`: OpenSSH de stock en ambos extremos.
 
-**Hoja de ruta (en orden):** granularidad del catálogo → UX-1 multitarea de la consola → UX-2 multi-consola simultánea (N canales sobre la misma sesión Noise) → Fase B daemon desatendido → capa post-cuántica (X25519 + ML-KEM-768). La evolución no agrega privilegios ni toca el transporte: mejora la experiencia de operación sin sacrificar aislamiento, identidad, autorización ni trazabilidad.
+**Hoja de ruta (en orden):** granularidad del catálogo → UX-1 multitarea de la consola (**✅ resuelta: Ctrl+T, §8.1**) → UX-2 multi-consola simultánea (N canales sobre la misma sesión Noise) → Fase B daemon desatendido → capa post-cuántica (X25519 + ML-KEM-768). La evolución no agrega privilegios ni toca el transporte: mejora la experiencia de operación sin sacrificar aislamiento, identidad, autorización ni trazabilidad.
 
 ---
 
