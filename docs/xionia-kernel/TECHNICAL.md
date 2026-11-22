@@ -45,15 +45,15 @@ ANEXO-DISENO-CRYPTO-PQ-v1.md y CIRUGIA-9.2-PQ-SESION.md (la capa PQ).*
 └──────────────────────────┬──────────────────────────┘
                            │ UDP / WSS
               ┌────────────┴────────────┐
-              │  FARO CASAMENTERO      │
-              │  UDP 55123 + STUN      │
-              │  (bootstrap fijo)      │
-              │  UDP 55125 · WSS 8444  │
-              │  UDP 443 (trampa)      │
-              │  corral rota 55000-60k │
-              │  Gate DID · rebind     │
-              │  sin cuotas · RAM only │
-              │  zero logs             │
+              │  FARO CASAMENTERO       │
+              │  UDP 55123 + STUN       │
+              │  (bootstrap fijo)       │
+              │  UDP 55125 · WSS 8444   │
+              │  UDP 443 (trampa)       │
+              │  corral rota 55000-60k  │
+              │  Gate DID · rebind      │
+              │  sin cuotas · RAM only  │
+              │  zero logs              │
               └─────────────────────────┘
 ```
 
