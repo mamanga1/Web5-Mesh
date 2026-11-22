@@ -82,19 +82,45 @@ sudo iptables -I INPUT -p tcp --dport 8444 -j ACCEPT
 # Guardar persistentemente las reglas
 sudo apt install -y iptables-persistent
 sudo netfilter-persistent save
-
 ```
+
+### Opción C: El 443 directo con `setcap` — sin root, sin iptables (el método de kati)
+
+Las Opciones A y B traducen el 443 hacia los puertos nativos. La C va más al hueso: que el faro mismo escuche el 443. El escollo: Linux reserva los puertos menores a 1024 para root, y el faro corre como usuario normal — el bind al 443 falla con `permission denied`.
+
+La solución no es correr el faro como root: es darle al **binario** (y sólo a él) la capability de bindear puertos bajos. El ritual completo, después de cada instalación:
+
+```bash
+sudo setcap cap_net_bind_service=+ep <ruta-ExecStart>   # SIEMPRE después de instalar: el archivo nuevo pierde el cap
+sudo systemctl restart faro
+tail -f ~/faro.log | grep -v ANNOUNCE
+```
+
+- **`setcap`** — la capability vive en el archivo, no en el comando: todo binario recién compilado o instalado nace sin ella. La ruta es la misma del `ExecStart` del unit.
+- **`systemctl restart faro`** — el servicio vuelve a levantar, ya con permiso para el 443.
+- **`tail -f ~/faro.log | grep -v ANNOUNCE`** — verlo vivir sin el ruido del latido: los ANNOUNCE constantes quedan afuera y sólo se ven los eventos que importan.
+
+El mismo ritual, traducido al faro semilla (kati):
+
+```bash
+sudo setcap cap_net_bind_service=+ep /home/ubuntu/xionia-kernel/faro-server
+sudo systemctl restart faro
+tail -f ~/faro.log | grep -v ANNOUNCE
+```
+
+Contra la Opción B: sin capa de traducción — el faro escucha el 443 de verdad y no hay reglas de firewall que mantener. Por eso kati eligió setcap.
+
+> Detalle fino: si tu unit tiene `NoNewPrivileges=true`, las file capabilities quedan anuladas — en ese caso sacás esa línea del unit, o usás `AmbientCapabilities=CAP_NET_BIND_SERVICE`.
 
 ---
 
-### Levantando el servicio (systemd)
+## Levantando el servicio (systemd)
 
 1. **Descargar / Compilar:**
 
 ```bash
-git clone [https://github.com/mamanga1/xionia-kernel](https://github.com/mamanga1/xionia-kernel)
+git clone https://github.com/mamanga1/xionia-kernel
 cd xionia-kernel && go build -o faro-server ./cmd/faro-server/
-
 ```
 
 2. **Crear la unidad de servicio (`/etc/systemd/system/faro.service`):**
@@ -120,7 +146,6 @@ PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target
-
 ```
 
 3. **Activar y arrancar:**
@@ -128,8 +153,9 @@ WantedBy=multi-user.target
 ```bash
 sudo systemctl enable faro
 sudo systemctl start faro
-
 ```
+
+> ⚠️ Si tu faro bindea el 443 directo (Opción C): después de **cada** instalación va el ritual `setcap` — sin excepción.
 
 4. **Conexión desde los nodos:**
 
@@ -163,6 +189,10 @@ Los binarios de SanJorge y Derinkuyu traen configurados por defecto los siguient
 
 No. Tres razones apiladas: lo que transporta es ciphertext (ChaCha20-Poly1305), no tiene las claves (nunca salen del dispositivo), y cuando hay túnel directo el tráfico no pasa por él. Verificable con `tcpdump`: el faro solo ve QUÉ IP:puerto habla, jamás QUÉ dicen.
 
+**¿Por qué "permission denied" cuando el faro quiere el 443?**
+
+Los puertos menores a 1024 son territorio de root en Linux. La solución no es root: es el ritual `setcap` de la Opción C — y SIEMPRE después de instalar, porque el archivo nuevo pierde el cap.
+
 **¿Por qué usamos el puerto 443 para el faro?**
 
 El puerto `443` es la autopista principal de HTTPS/QUIC. Las operadoras no pueden bloquearlo sin romper la conectividad web global. Esto permite que la red funcione sin crédito o bajo cortafuegos restrictivos.
@@ -173,4 +203,4 @@ El círculo ya constituido sigue hablando directo (verificado en pruebas de camp
 
 ---
 
-Última actualización: Octubre de 2026 — `xionia-kernel v9.1` en producción.
+Última actualización: Noviembre de 2026 — `xionia-kernel v9.2` (parches 0016/0017) en producción.
