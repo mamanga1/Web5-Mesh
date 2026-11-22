@@ -3,15 +3,15 @@
 ## XionIA: Infraestructura de Soberanía Digital
 
 **Comunicación ininterrumpible, cifrado soberano y transporte de datos mediante
-túneles directos ICE + Noise IK. Construido como una Jaula verificable para
-entornos hostiles.**
+túneles directos ICE + Noise IK/IKpsk2 — híbrido post-cuántico (X25519 +
+ML-KEM-768). Construido como una Jaula verificable para entornos hostiles.**
 
 XionIA no es un messenger. Es un **User-Space Kernel** de comunicación soberana
 que perfora NAT, CGNAT y hasta VPNs dobles mediante túneles cifrados punto a
 punto. No depende de servidores centrales ni de autoridades de validación.
 Cada nodo es dueño de su identidad, su ruta y su destino.
 
-> **ICE conecta. Noise protege. DID identifica. ACL autoriza. Kernel orquesta.**
+> **ICE conecta. Noise protege dos veces. DID identifica. ACL autoriza. Kernel orquesta.**
 
 ---
 
@@ -117,13 +117,15 @@ La red es un espacio de pares iguales. No existen clientes ni servidores,
 solo **Nodos Soberanos**. El sistema se basa en tres pilares:
 
 ### 1. Identidad es Soberanía
-Todo nodo se identifica por su clave pública (DID `did:maia:...`, Ed25519 +
-X25519). No hay autoridades centrales que validen quién sos. La identidad es
-la firma criptográfica. Sin registro, sin teléfono, sin email.
+Todo nodo se identifica por su clave pública (DID `did:maia:...` — Ed25519 +
+X25519 + ML-KEM-768, `node.key` v2 con DID inmutable). No hay autoridades
+centrales que validen quién sos. La identidad es la firma criptográfica.
+Sin registro, sin teléfono, sin email.
 
 ### 2. Conexión es Directa
 Los nodos se comunican punto a punto mediante túneles ICE sobre UDP, cifrados
-con Noise IK. Si hay un NAT en el medio, se perfora — el CGNAT de la
+con Noise IK — o, entre pares PQ, con IKpsk2 híbrido: X25519 + ML-KEM-768
+en el mismo handshake. Si hay un NAT en el medio, se perfora — el CGNAT de la
 operadora, el NAT casero, y hasta dos VPNs encadenadas. Si no se puede, el
 faro hace de relay ciego: transporta ciphertext opaco y nada más. La conexión
 es directa por defecto, no por excepción.
@@ -138,27 +140,31 @@ directa con el faro caído. La red es resiliente por diseño. La escalada es la
 
 ## 🛡️ Las Leyes de la Arquitectura
 
-### La Ley de la Identidad (Noise IK + ACL)
+### La Ley de la Identidad (Noise IK/IKpsk2 + ACL)
 Todo paquete que viaje por la red debe llevar el sello criptográfico de su
 dueño. Solo se establece comunicación si ambas partes pueden probar que
 poseen la clave privada de su DID: el handshake Noise IK enclava la clave
-estática del peer, y al completarse se verifica contra la ACL. Un impostor
-que reclame un DID ajeno resulta en sesión descartada. Si no te conozco, no
-existís.
+estática del peer — y desde v9.2, el IKpsk2 híbrido suma ML-KEM-768 al mismo
+apretón, así la sesión queda cerrada por dos matemáticas y una computadora
+cuántica ya no alcanza para abrirla. Al completarse, se verifica contra la
+ACL — cuatro claves, `pubkey_kem` incluida. Un impostor que reclame un DID
+ajeno resulta en sesión descartada. Si no te conozco, no existís.
 
 ### La Ley del Transporte (Obfuscated Noise)
 El tráfico de la red debe ser invisible al DPI (Deep Packet Inspection) de
 los ISPs y firewalls corporativos. UDP nativo (no TCP, no WireGuard) con
 padding aleatorio de 50–200 bytes en lo que toca al faro. La señalización
 ICE viaja en base64 opaco. El tráfico parece ruido blanco estadístico,
-no una VPN.
+no una VPN. Y en redes restrictivas, el faro también atiende UDP 443:
+el puerto que cualquier red deja pasar.
 
 ### La Ley del Descubrimiento (Anti-DHT)
 Kademlia y las DHTs son pesadas y burocráticas. XionIA usa un Faro de
 Registro Volátil que solo almacena en RAM: `DID → Socket Activo`. Cero
-discos, cero logs. Consulta O(1). Los nodos recuerdan a quienes hablaron.
-Si la red es estable, el Faro deja de ser necesario — 10.000 nodos ≈ 1.3
-Mbps y 10 MB de RAM.
+discos, cero logs. Consulta O(1). El faro verifica la firma y presenta —
+**casamentero, no árbitro**: sin cuotas, sin permisos; la firma es el único
+pase. Los nodos recuerdan a quienes hablaron. Si la red es estable, el Faro
+deja de ser necesario — 10.000 nodos ≈ 1.3 Mbps y 10 MB de RAM.
 
 ### La Ley del Discriminador (congelada)
 El kernel despacha sus paquetes con dos bytes de discriminador: `0x01`
@@ -206,6 +212,10 @@ una con su cicatriz.
 8. **La pantalla del nodo que falla es la evidencia reina.** Afirmar sin
    dato es la única forma de perder esta casa.
 
+9. **El faro presenta, no decide:** toda cuota o permiso centralizado —
+   aunque nazca como "higiene" — es un árbitro disfrazado de casamentero.
+   La firma del DID es el único pase.
+
 ---
 
 ## 🏢 XionIA como Plataforma
@@ -241,17 +251,28 @@ de nadie para hacer lo propio.
 - Faro ciego operativo, cifrado E2E, shell, Jaula
 - Público: github.com/mamanga1/Web5-Mesh
 
-### Fase 2: El Kernel — xionia-kernel ✅ (en producción)
+### Fase 2: El Kernel — xionia-kernel ✅ (en producción, v9.2.4 · release v1.5)
 - Túneles directos ICE (perfora NAT, CGNAT, VPNs dobles — validado)
-- Noise IK con Forward Secrecy por sesión y anti-suplantación de DID
-- Auto-heal completo: 7 gatillos independientes
-- Piel Android (SanJorge) con testigo DIRECT/BLIND RELAY
+- Noise IK/IKpsk2 con Forward Secrecy por sesión y anti-suplantación de DID —
+  desde v9.2, híbrido post-cuántico: X25519 + ML-KEM-768 (FIPS 203) en el
+  mismo handshake, y co-firma ML-DSA-65 en los DID-docs
+- `remote`: SSH real por DID — 0 puertos abiertos, 0 credenciales
+  persistentes, recibo firmado de cada sesión
+- Auto-heal completo: 8 gatillos independientes
+- El faro casamentero: rebind sin cuotas, cooldown, puerto local estable
+  y trampa UDP 443
+- Piel Android (SanJorge 1.6) con testigo DIRECT/BLIND RELAY
 - XFER de archivos por los túneles (consola)
 - La consola como taller: workspace + firma + archivos
 
 ### Fase 3: La Voz y la Escala
-- **VoIP solo-direct:** "el chat perdona 2s, una llamada no perdona 200ms" —
-  el audio en tiempo real como detector de mentirosos del kernel
+- **VoIP solo-direct (SanJorge 2.0 «zappa»):** voz Opus como un canal más de
+  la sesión híbrida — frames chicos por el camino directo, jamás relay.
+  "El chat perdona 2s, una llamada no perdona 200ms": el audio en tiempo
+  real como detector de mentirosos del kernel
+- **Enjambre de faros:** buzón efímero por HTTPS/443 — anillo híbrido
+  (Cloudflare + faros soberanos; CF nunca solo) para el primer contacto
+  y los despertares
 - **LATIDO:** push soberano por el propio faro — para el mundo desgoogleado
   donde WhatsApp y Signal pierden FCM
 - **Consola web:** "sin XionIA podés leer, con XionIA podés publicar"
@@ -294,6 +315,8 @@ XionIA no compite con la internet tradicional. La **complementa**:
 - **Slack/Teams**: reemplazado por canales soberanos auditables
 - **Google Drive**: el taller propio en la Jaula, firmado con tu clave
 - **Email corporativo**: túneles con trazabilidad criptográfica
+- **Computación cuántica**: "cosechar hoy, descifrar mañana" ya no alcanza —
+  cada sesión nace cerrada con dos matemáticas (X25519 + ML-KEM-768)
 
 El intermediario que no se corrompe es el nodo más poderoso de la historia.
 
